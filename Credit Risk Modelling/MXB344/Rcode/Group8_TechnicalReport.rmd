@@ -1,0 +1,1840 @@
+---
+title: "Group8_Technical Report"
+author: "Jing Heng Lim, Vinnie Ng, Dominic Chow, Joseph Grench"
+date: "October 28, 2019"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r load libary and packages, warning=FALSE, echo=FALSE, message=FALSE}
+library(rlang)
+library(tidyverse)
+library(readr)
+library(caret)
+library(readr)
+library(funModeling) #Meta Data
+library(MASS)
+library(reshape2)
+library(corrplot)
+library(ggplot2)
+library(pROC)
+library(plyr)
+library(tidyverse)
+library(car)
+library(Information)
+library(ROCR)
+library(party)
+library(chron)
+library(glmnet)
+library(boot)
+library(mlbench)
+library(caret)
+library(doParallel)
+library(gbm)
+library(InformationValue)
+library(ggpubr)
+library(knitr)
+```
+
+```{r Load Data, echo=FALSE, warning=FALSE, message=FALSE}
+
+final<-read.csv("final_data.csv", header = T)
+benchmark <- read.csv("val_set_roc.csv", header = T)
+
+data <- funModeling::df_status(final, print_results = FALSE)
+knitr::kable(data)
+
+attach(final)
+
+## Note
+
+# -q_zeros: quantity of zeros (p_zeros: in percentage)
+# -q_na: quantity of NA (p_na: in percentage)
+# -type: factor or numeric
+# -unique: quantity of unique values
+
+```
+
+## 1.0 Introduction - Problem & Context 
+
+The task at hand of rebuilding the credit risk model based on the current loan defaults of Bank of Queensland (BoQ) using Generalised Linear Models was undertaken as their previous model was deemed too ad-hoc. The primary objective of the project was optimizing a new model to provide stronger predictability and decision making for different possible loan scenarios.
+
+Having been given past data and benchmark values to better, extensive research and testing was conducted, variable selection methods were performed, and an adapted credit risk model based on StepAIC was found to provide a more efficient way to classify loan defaults.
+
+## 2.0 Literature Review
+#Determinants
+According to the credit risk modeling experts of SAS, elements of a good credit risk model cover speed, precision, confidence (Akhadov, Rogers & Filipenkov, 2018). Speed of credit decisions matter as competition means a lag of several minutes means a world of difference. Precision determines the extent of accurate credit decisions that maximize revenue and minimize defaults. A good measure of confidence is the balance between risk aversion and business development in a model to allow more creditworthy customers as well as ensuring validity of models through transparency and rigor in credit scoring.
+
+#Traditional vs Modern Models
+Traditional models often assume parameterization based on applicants having identical patterns or behaviors whereby this is not always the case, especially considering arbitrary classifications when taking into account what may be considered 'good' or 'bad' standing (Banasik, Crook & Thomas, 2003). Modern models are moving away from processes that allow for human biases in the manual processes and are incorporating as much alternative information and putting new algorithms and segmented models to the test. A study on dynamic credit risk modeling by (Moradi & Mokhatab Rafiei, 2019) to include generalized additive models (GAM) for classification and classification under supervised training and adaptive network-based fuzzy inference system (ANFIS) to adapt to input data and minimize error based on gradient descent training principle and fuzzy logic.
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+txt<-data.frame("Traditional Models"=c("Tools consist of Logistic Regression, Na?ve Bayes, etc.	","Heavily based on historical data/samples, Boolean logic	","Based on static loss assumptions","Focused on systematic risk components	","Open to human bias due to manual processes","Manual processes bring heavy cost, slow decisions"),"Modern Models"=c("Tools consist of Neural Networks, Recursive Partitioning Models, Radial-Basis Functions, etc.",
+"Involves use of out-of-sample forecasts, makes use of consumer behavior data, uses fuzzy inference systems, etc.","Use of segmented markets","Integrated platform use","Expansive use of automated processes","Adaptive with anomaly detection and predictive analytics uncovering new forms of risk at any given time"))
+kable(txt,caption="Table 1:Characteristics of Current vs Modern Evolving Tools")
+```
+
+#Default Recovery Rates in Credit Risk
+Traditional credit risk modeling assumes collateral values and recovery rates as a constant parameter or as a stochastic variable independent from probability of default. The authors Altman, Resti & Sironi (2004) recognize that three main variables affect the credit risk of a financial asset, which are probability of default (PD), loss given default (LGD), and exposure at default (EAD). Probability of default, found by one minus recovery rate, is typically given significant attention while much less so has been given to loss given default and its relationship with probability of default.
+
+#Sample Selection Bias
+In selecting a model as well, sample selection bias is still evident in traditional models. This ties in with how much less of a focus is given to those approved for loans rather than those who failed to receive one (Ditrich, 2015). While a focus on reject inference has been attempted by several studies, techniques such as augmentation and extrapolation remain scrutinized by academics despite some results improving accuracy and discriminative power of models.
+
+#Variable Importance (VI)
+Variable importance allows for a quantitative ranking of how each predictor contributes to the model but at times heuristics have to be applied to include specific variables despite poor results. Feature engineering can be conducted to improve predictor existence.
+
+#Multicollinearity 
+Use of a computational score variance inflation factor (VIF) allows for a measure of inflation of variance of regression coefficients due to multicollinearity in the model (Yoo et al., 2014). This serves as an independence test across variables. By removal of factors with VIF values deemed high, at approximate cut-off point of ten, it allows for simplification of model through the reduction of redundant data.
+
+#Random Forests
+Random Forests is one of the techniques we picked to try as a bagging classifier to allow better aggregation (Grennepois, Alvirescu & Bombail, 2018). It enables us to limit overfitting, presents high accuracy, provide easy choice of variables and is stable. Its drawbacks of parameter choice and lower interpretability were less factors to consider.
+
+#Measures & Optimal Cut-Off
+Determinants found to be of use in optimal decision threshold of models are sensitivity and specificity, of which the maximum sum of determines the best point to minimize overall error of modelling credit risk. These two factors are determined by the possible outcomes consisting of true positives, true negatives, false positives, and false negatives. Kolmogorov-Smirnov tests (Rezac & Rezac, 2011) provide a visual for credit scorecard models. 
+
+
+# 3.0 Data Exploration and Cleaning
+
+## 3.1 Understanding the data
+
+As observed above there is no variable with 100% missing or zero values. There are some variables have a high ratio of NAs such as *mths_since_last_delinq* and *next_pymnt_d*. Again the data will have to be checked if it is useful for model building. 
+
+Besides, the data shows a high absolute number of unique valies which will be helpful for plotting across other variables. 
+
+
+### Number of unique in percentage % 
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+data <- 
+  data %>% 
+  mutate(uniq_rat = unique / nrow(final))
+
+data %>% dplyr::select(variable, unique, uniq_rat) %>%
+mutate(unique = unique, uniq_rat = scales::percent(uniq_rat)) %>% knitr::kable()
+```
+
+A variable that holds more than 30% unique values is not ideal to be use for modelling as its too variable.
+
+
+### Data Transformation and restructure
+
+Data standardization is part of the process of making sure that data is internally consistent. In this data, dates (issue_d,last_credit_pull_d,next_pymnt_d,last_pymnt_d and earliest_cr_line) have been set into day/month/year format. Another change was classifying the factor revol_util from percentages into integer.
+
+Some variables in the data appear to be in very different ranges. Based on our understanding of the data, we normalized the variables below from continuous variables into binary variables. 
+
+*mths_since_last_delinq: The number of months since the borrower's last delinquency.
+*inq_last_6mths        : The number of inquiries in past 6 months (excluding auto and mortgage inquiries)
+*delinq_2yrs           : The number of 30+ days past-due incidences of delinquency in the borrower's credit file for the past 2 years
+*pub_rec               : Number of derogatory public records
+
+As from a bank perspective of being more risk averse, banks would prefer having borrowers who hold "clean" records "0" without any issues as per variables mentioned above. Hence, if a borrower commits any of these at least once, they will be considered a "bad" record "1" borrower. Therefore, setting these variables into binary form enables improvement in the interpretation of the variables.
+
+Besides this, a binary transformation was done on employment length (emp_length) as the n/a factor appear to be the only significant variable when doing fitting into the model. Hence, transforming into a binary form is necessary here by conversion to a "1" represented that the applicant was unemployed and "0" represented that the applicant was employed. 
+
+NONE from home_ownership had been move into the OTHERS category as there were only 4 data points under this category.
+
+A new variable was created and named as credit_length, which is essentially just the difference between the time period of issue date and borrower's earliest credit line and was recorded in days.
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+
+# set repay_fail from int to factor
+final$repay_fail<-factor(final$repay_fail)
+final$issue_d<-as.Date(paste("01-", final$issue_d, sep = ""), format = "%d-%b-%y")
+final$earliest_cr_line<-as.Date(chron(paste("01-", final$earliest_cr_line, sep = ""), format = "day-month-year"))
+
+# From the 1st table above we see that *mths_since_last_deling* holds a large value of NAs. If we dive deep to understand this 2 variables, the NAs could indicate that clients does not have any delinquency record. Hence, it will be set to 0.
+
+#mths_since_last_deling
+final$mths_since_last_delinq<- factor(ifelse(is.na(final$mths_since_last_delinq), 1, 0))
+
+#Set inq last 6 months into binary
+final$inq_last_6mths<- factor(ifelse(final$inq_last_6mths>0, 1, 0))
+
+#convert the variables
+final$revol_util <- as.numeric(sub("%","",final$revol_util))/100 # setting into numeric form
+
+# setting delinq_2yrs into binary
+final$delinq_2yrs<-factor(ifelse(final$delinq_2yrs>0, 1, 0))
+
+# setting pub_rec into binary, if there the client had more than 1 derogatory record will be set into 1 else 0 -- test this
+final$pub_rec<-factor(ifelse(final$pub_rec>0, 1, 0))
+
+## earliest credit line -  change earliest credit line to difference between credit line and issue date
+     final$credit_length <- final$issue_d -final$earliest_cr_line
+     final$credit_length <- as.numeric(final$credit_length, units="days")
+     final<-subset(final,select=-c(issue_d,earliest_cr_line))
+
+# "Employment Length" was converted to a binary variable, where "1" represented that the applicant was unemployed and "0" represented that the applicant was employed.
+
+emp_length.f = matrix(0, length(final$emp_length), 1)
+for (i in 1:length(emp_length.f)){
+  if (final$emp_length[i] == "n/a"){
+    emp_length.f[i] = 1
+  }
+}
+
+####
+final$home_ownership<-as.character(final$home_ownership)
+final$home_ownership[final$home_ownership %in% c("OTHER","NONE")] <- "OTHER"
+final$home_ownership <- as.factor(final$home_ownership)
+
+#Setting repay fail into logic indicator TRUE and FALSE
+
+defaulted <-
+  c("1")
+
+final <- cbind(final, emp_length.f)
+rm(emp_length.f)
+final$emp_length.f<-factor(final$emp_length.f)
+final<-subset(final, select = -c(emp_length)) # replaced by emp_length.f , removed emp_length
+attach(final)
+```
+
+### Removing Variables
+
+Some variables could appear similar to other variables or were deemed not benificial to the model due to the incomplete nature of the data. Thus, they will be removed and will not be considered in our model.
+
+The variables that we removed:
+* X.1                 : Not an indicator for modelling, since all values are unique
+* X                   : Not an indicator for modelling, since all values are unique
+* id                  : Not an indicator for modelling, since all values are unique
+* member_id           : Not an indicator for modelling, since all values are unique
+* next_pymnt_d        : Appears to have high NAs ratio approximately 91.2%, not known before loan
+* addr_state          : Avoid geographical bias 
+* zip_code            : Avoid geographical bias 
+* loan_status         : Not known before loan is accepted/rejected
+* total_pymt          : Not known before loan 
+* total_pymnt_inv     : Not known before loan
+* total_rec_int       : Not known before loan
+* total_rec_prncp     : Not known before loan
+* last_pymnt_d        : Not known before loan
+* last_pymnt_amnt     : Not known before loan
+* recoveries          : Not known before loan
+
+```{r remove variables, echo=FALSE, message=FALSE, warning=FALSE}
+# remove unused variables 
+final<-subset(final, select = -c(X.1,X,id,member_id,next_pymnt_d,loan_status,addr_state,zip_code, total_pymnt, total_pymnt_inv, total_rec_int, total_rec_prncp,last_pymnt_d, last_pymnt_amnt, next_pymnt_d,recoveries, last_credit_pull_d,funded_amnt,funded_amnt_inv))
+```
+
+### Attend Missing Data
+All rows which contained n/a values across the dataset were removed to ensure smooth modelling process. Important to note is that this left the overall dataset at an acceptable value as there were approximately only 50 values removed at this stage after prior factor evaluation and cleaning
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+
+final <- na.omit(final)
+
+```
+
+## 3.2 Data Overview
+
+### Exploratory Data
+Consequently after cleaning the data, a read on the repay fail ratio of the data was found to give an approximation of about 18% as the default rate. 
+```{r importing data warning=FALSE, echo=FALSE, message=FALSE}
+# Checking amount of repay fail by the bank
+ppl_default<-table(final$repay_fail)
+default_rate<-ppl_default[[2]][1]/ppl_default[[1]][1]
+default_rate # default rate approximately 18% 
+```
+Exploratory plots were then set up using ggplot to visualize data nature and to decide on methods of approaching normality or otherwise.
+
+## Verification Status
+A plot of verification status against repay fail showed somewhat of a fair distribution of data across the three statuses. Early considerations of combining source verified and verified were dismissed to ensure degree of verifications would reflect in model complexity.
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+
+ggplot(final, aes(x = verification_status, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("verification_status")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail")
+
+```
+Results suggest that sources that were not verified tend to have higher repayment rates. This goes against conventional wisdom that there is stronger legibility when customers are verified and are more likely to successfully repay loans, leading to the suspicion for inclusion of the factor in the model.
+
+## Home Owership
+The plot for home ownership showed a skewed distribution for reasons of MORTGAGE and RENT. Other reasons OWN and OTHER were much less weighted but proportions were quite even across.
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final, aes(x = home_ownership, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("home_ownership")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail") 
+
+HOtable<-table(final$home_ownership,final$repay_fail)
+prop.table(HOtable,1) #Shows row percentages
+```
+
+##Interest Rates
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final , aes(x = (int_rate), fill = repay_fail)) + 
+  geom_bar(width=0.25) + 
+  xlab("int_rate") +
+  ylab("Repay fail counts") +
+  labs(fill="repay fail") +
+  xlim(0,50) +
+  ylim(0,350)
+
+```
+
+## Sub_Grade
+A focus on sub_grade rather than grade is done to allow a greater read of how each dissected grade varies with repay failures. Removal of grade will be in order as subgrade encompasses it as well. It is known that the lower the grade tends to have a higher interest rate, but to visualize this plots are used.
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final , aes(x = sub_grade , y = int_rate , fill = sub_grade)) + 
+        geom_boxplot() + 
+        labs(y = 'Interest Rate' , x = 'Sub_Grade')
+
+ggplot(final, aes(x = sub_grade, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("Sub_Grade")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail") 
+
+```
+Data shows right-skewed pattern and patterns of change seem to follow accordingly. A look into proportions is done:
+
+##Subgrade Proportions
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+subgrade<-table(final$sub_grade,final$repay_fail)
+subgradeprop<-prop.table(table(final$sub_grade,final$repay_fail),1)
+(subgradeprop)
+subgradeprop<-matrix(c(subgradeprop),nrow=35)
+
+
+subgradeprop<-data.frame(levels(final$sub_grade),subgradeprop[,1],subgradeprop[,2])
+qplot(data=subgradeprop,x=levels(final$sub_grade),y=subgradeprop[,2],xlab="Levels",ylab="Proportion of Zeros")
+qplot(data=subgradeprop,x=levels(final$sub_grade),y=subgradeprop[,3],xlab="Levels",ylab="Proportion of Ones")
+
+ggplot()+
+    geom_point(aes(x=levels(final$sub_grade)),y=subgradeprop[,2],data=subgradeprop,colour="red") +
+    geom_point(aes(x=levels(final$sub_grade)),y=subgradeprop[,3],data=subgradeprop,colour="blue") +
+    scale_y_continuous()
+```
+Consistent patterns are observed across proportions and a clear pattern of increasing repay failures as subgrades drop is observed. This serves as a strong indicator of significance in the model.
+
+## Debt-To-Income (DTI)
+Debt-to-income ratio according to many prior credit ratio models play significant factor due to the natural correlation between income and ability to pay off debt. The plot constructed shows normality across different DTI levels but as DTI ratios move close to 30, there are significantly less counts, suggesting that a ratio of 25 might be a big cut-off point.
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final, aes(x = dti, fill = factor(repay_fail)))+
+  geom_bar(width = )+
+  xlab("dti")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail") +
+  xlim(0,40) +
+  ylim(0,50)
+  
+```
+
+## Employment Period
+After treatment of employment period to a binary factor, a proportion table was used to see how repay fail ratios looked like. Note that emp_length.f '0' indicates client is employed, or else '1' indicates unemployed.
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final, aes(x = emp_length.f, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("Employment Period")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail") # Do it in boxplot
+
+# Proportion table for repay fail rate by employment length 
+q<-colSums(table(repay_fail,emp_length.f))
+q<-rbind(q,q)
+t(table(repay_fail,emp_length.f)/q)
+
+```
+
+##Purpose
+Plots for purpose of loans show irregularity in distribution with abnormally high counts of consolidation points in comparison to other reasons.However, proportion tables show acceptable levels of repay failure rates across all groups except for small_business and educational reasons.
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final , aes(x = (purpose), fill = repay_fail)) + 
+  geom_bar(width=) + 
+  xlab("Purpose") +
+  ylab("Repay fail counts") +
+  labs(fill="repay fail")
+
+Purptable<-table(final$purpose,final$repay_fail)
+prop.table(Purptable,1) #Shows row percentages
+```
+
+##Installments
+Based off prior literature, installment rates reflect amounts to be paid back and are highly correlated with terms. While there are more lower installments, it shows that higher installment amounts show higher odds of repay failure. Thus, this will be a factor to consider in the model.
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+ggplot(final , aes(x = (installment), fill = repay_fail)) + 
+  geom_bar(width=0.75) + 
+  xlab("Installment") +
+  ylab("Repay fail counts") +
+  labs(fill="repay fail") +
+  ylim(0,40)
+```
+
+### Loan Amount and Annual Income 
+It was observed that the histogram for loan amount and annual income are right skewed. This was easily fixed by adding a log-transformation into the variables.
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+par(mfrow= c(2,2))
+hist(loan_amnt)
+hist(annual_inc)
+hist(log(loan_amnt))
+hist(log(annual_inc))
+
+```
+
+## 3.3 Correlation Plot and Information Value
+
+Information value is one of the most useful technique to select important variables in a predictive model. It helps to rank variables on the basis of their importance in the mean time it will gives a rough idea in which variables we will be expected to be in our model. The output can be interpreted by following
+
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+
+Informationvalue <- c("Less than 0.02","0.02 to 0.1","0.1 to 0.3","0.3 to 0.5"," > 0.5")
+Variable_Predictiveness<-c("Not useful for prediction","Weak predictive Power","Medium predictive Power","Strong predictive Power","Too good to be true / Suspicious")
+Step.AIC.results<-data.frame(Informationvalue, Variable_Predictiveness)
+
+knitr::kable(Step.AIC.results, col.names = c("Information Value","Variable Predictiveness"))
+
+#1st and last plot not included in thereport
+
+final$repay_fail<-as.numeric(final$repay_fail)-1
+infoTables <- create_infotables(data = final,
+                               y = "repay_fail")
+
+final$repay_fail<-as.factor(final$repay_fail)
+
+#  Plot IV
+plotFrame <- infoTables$Summary[order(-infoTables$Summary$IV), ]
+plotFrame$Variable <- factor(plotFrame$Variable,
+
+                            levels = plotFrame$Variable[order(-plotFrame$IV)])
+
+ggplot(plotFrame, aes(x = Variable, y = IV)) +
+geom_bar(width = .35, stat = "identity", color = "darkblue", fill = "white") +
+ggtitle("Information Value") +
+theme_bw() +
+theme(plot.title = element_text(size = 10)) +
+theme(axis.text.x = element_text(angle = 90))
+
+# remove grade as it holds less IV than sub_grade
+final<-subset(final, select = -c(grade))
+```
+
+As we observe the Information value table it shows that sub_grade, int_rate and grade holds a strong predictive power. However, sub_grade and grade share the same information here. Hence, it is not necessary to include both of the variables in our model. Therefore, grade will be removed here as sub_grade holds a higher predictive variable power than grade itself. 
+
+
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+
+num_var <- 
+  final %>% 
+  sapply(is.numeric) %>% 
+  which() %>% 
+  names()
+
+corrplot(cor(final[,num_var]), method = "circle", use="complete.obs", type ="upper")
+
+# It appears loan amnt variable is highly correlated with funded_amnt, funded_amnt_inv, installment, total_payment, total_payment_inv, total_rec_prncp,total_rec_int. Hence, these variables will be removed
+
+# total acc show high correlation with open_acc. Hence, open_acc its removed
+final<-subset(final, select = -c(installment, open_acc))
+```
+
+Based on the correlation plot above it appears loan_amnt is highly correlated with installment and open_acc is higly correlated with total_acc. Hence, we can strongly suggest that these variables are sharing the same information. Therefore, either one of the variable will be removed in this case, installment and open_acc will be removed.
+
+# 4.0 Variables Selection
+## Data Splitting
+We have split our dataset by 70% as training set for model training and 30% as test set to test our model.
+
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+# 30% validation, 70% training
+smp_size <- floor(0.70 * nrow(final))
+set.seed(69)
+train_ind <- sample(seq_len(nrow(final)), size = smp_size)
+
+train <- final[train_ind, ]
+test <- final[-train_ind, ]
+
+train.AIC<-train
+test.AIC <- final[-train_ind, ]
+train.rf<-train
+train.las<-train
+
+```
+
+
+## 4.1 StepAIC
+
+### 4.1.1 Fitting individuals variable in GLM
+
+In this section we will be fitting all the variables individually into the GLM model to determine by p-value (< 0.05) whether the variable is significant or insignificant in the model. On the other hand, to observe the impact of the variable holds when there is only one variable use to predict the response. This can be determine by its coefficients, if the coefficients is nearly zero we can sort of conclude the variable does not have much impact in the model. However, futher investigation will be needed.
+
+```{r fitting glm model, message=FALSE, echo=FALSE, warning=FALSE}
+
+attach(final)
+
+fit_loan_amnt <- glm(repay_fail ~ log(loan_amnt) , data = train.AIC, family = binomial(link = "logit"),maxit=100) # maxit is added so that the glm model will converge
+
+fit_term<- glm(repay_fail ~ term , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_int_rate<- glm(repay_fail ~ int_rate , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_sub_grade<- glm(repay_fail ~ sub_grade , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_home_ownership<-glm(repay_fail ~ home_ownership , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_annual_inc<-glm(repay_fail ~ log(annual_inc) , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_verification_status<-glm(repay_fail ~ verification_status , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_purpose<-glm(repay_fail ~ purpose , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_dti<-glm(repay_fail ~ dti , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_delinq_2yrs<-glm(repay_fail ~ delinq_2yrs , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_inq_last_6mths<-glm(repay_fail ~ inq_last_6mths , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_mths_since_last_delinq<-glm(repay_fail ~ mths_since_last_delinq , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_pub_rec<- glm(repay_fail ~ pub_rec , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_revol_util<- glm(repay_fail ~ revol_util , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_total_acc<- glm(repay_fail ~ total_acc , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_emp_length.f<- glm(repay_fail ~ emp_length.f , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_credit_length<- glm(repay_fail ~ credit_length , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+# low coef
+
+
+model.list <- list(
+  "fit_loan_amnt" = fit_loan_amnt,
+  "fit_term" = fit_term,
+  "fit_int_rate" = fit_int_rate,
+  "fit_sub_grade" = fit_sub_grade,
+  "fit_home_ownership" = fit_home_ownership,
+  "fit_annual_inc" = fit_annual_inc,
+  "fit_verification_status" = fit_verification_status,
+  "fit_purpose" = fit_purpose,
+  "fit_dti" = fit_dti,
+  "fit_delinq_2yrs" = fit_delinq_2yrs,
+  "fit_inq_last_6mths" = fit_inq_last_6mths,
+  "fit_mths_since_last_delinq" = fit_mths_since_last_delinq,
+  "fit_pub_rec" = fit_pub_rec,
+  "fit_revol_util" = fit_revol_util,
+  "fit_total_acc" = fit_total_acc,
+  "fit_emp_length.f" = fit_emp_length.f
+)
+
+pvalue <- function(fit) {
+  a <- summary(fit)
+  p.value <-a$coefficients[1,4]
+  if (p.value > 0.05) {sig <- "Not Significant"}
+  else if (p.value > 0.01) {sig <- "Significant"}
+  else {sig <- "Highly Significant"}
+  return(sig)
+}
+
+pvalues <- sapply(model.list, FUN = pvalue)
+list.name <- c(names(train.AIC)[1:15], names(train.AIC)[19])
+
+result <- 
+  data.frame(
+    Variable = list.name,
+    Pvalue = pvalues
+  )
+knitr::kable(result,row.names = FALSE,col.names = c("Variables", "P-Value"))
+
+```
+
+As we observed the table above it appears that all vairables are a good predictor for the response variable.
+
+#### Result
+
+Summary steps for stepwise variables selection
+
+Step 1: Fit a full initial model
+Step 2: Check for multicollinearity, remove either one variable that has GVIF>5 or 10
+Step 3: Run stepwise regression on forward and backward direction
+Step 4: Summarize the model, remove any insignificant variables
+
+First of all, we fit all the variables that is left as full initial model are, *Initial_full_AIC_model = repay_fail~log(loan_amnt)+term+sub_grade+int_rate+home_ownership+log(annual_inc)+verification_status+purpose+dti+delinq_2yrs+inq_last_6mths+mths_since_last_delinq+pub_rec+revol_util+total_acc+emp_length_factor+credit_length*. 
+
+Before proceeding stepwise variables selection, we take into account for the multicollinearity of the model accross the variables. This can be determine by Variance Inflation Factor (VIF), the rule of thumb for vif is that collinearity would cause large variance and covariance and making precise estimation difficult. So, it is necesarry to detect the collinearity as well as to remove them. Generally any values more than 10  is yet to be said that the variables are highly collinear. 
+
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+# - Multicollinearity
+# - StepAIC final model
+# - remove insignificant variables
+
+
+ini.AIC<-
+  glm(repay_fail ~ 
+        log(loan_amnt) + term + sub_grade + int_rate + home_ownership +
+        log(annual_inc) + verification_status + purpose + dti +
+        delinq_2yrs + inq_last_6mths + mths_since_last_delinq +
+        pub_rec + revol_util + total_acc+emp_length.f + credit_length,
+      data = train.AIC, family = binomial(link ="logit"), maxit=100)
+
+# For further checking of the model, we would determine the initial model by using Variance Inflation Factor (vif) to check for multicollinearity
+vif(ini.AIC)
+
+# The rule of thumb for vif is that collinearity would cause large variance and covariance and making precise estimation difficult. So, it is necesarry to detect the collinearity as well as to remove them. Generally any values more than 10  is yet to be said that the variables are highly collinear. In this case it appears that int_rate and grade are higlly collinear, since grade have a higher coef than int_rate , int_rate will be remove from the model.
+
+```
+
+In this case it appears that int_rate and sub_grade are higlly collinear, since sub_grade have a higher coefficient than int_rate , int_rate will be remove from the model.
+
+After that. a stepwise regression (stepAIC) is used for variables selection by setting both direction with "forward" and "backward" direction. The summary of the final model by stepAIC will be revise by removing any insignificant variables.
+
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+set.seed(69)
+# Int_rate is removed from the Initial_full_model
+Initial_full_model <-glm(repay_fail ~ 
+                    log(loan_amnt) + term + sub_grade + home_ownership + 
+                    log(annual_inc) + verification_status + purpose + dti +  
+                    delinq_2yrs + inq_last_6mths + mths_since_last_delinq + 
+                    pub_rec + revol_util + total_acc + emp_length.f + credit_length,
+                    data = train.AIC , family = binomial(link ="logit") , maxit=100)
+
+
+# We wanted to check in general if addr state play significant role in the model as it holds a huge number of factors, this can be done by Calculation Of Variable Importance For Regression And Classification Models (varImp)
+
+
+
+#stepAIC
+AIC.final<-stepAIC(Initial_full_model, direction = "both")
+
+summary(AIC.final) #dti and total _acc is insignificant, remove insignificant variables
+
+# final stepAIC model
+AIC.final<-glm(repay_fail ~ term + sub_grade + log(annual_inc) + purpose  + inq_last_6mths + pub_rec + revol_util + emp_length.f + credit_length, data = train.AIC, family = binomial(link ="logit"),maxit=100)
+
+```
+
+From the summary above it appears *dti* and *total_acc* to be insignificant to the data. Hence, it will be removed from the model.
+
+The final model by stepAIC, includes 9 variables:
+* term
+* sub_grade
+* log(annual_inc)
+* purpose
+* inq_last_6mnths
+* pub_rec
+* revol_util
+* emp_length.f
+* credit_length
+
+#### Link Function
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+set.seed(69)
+stepAIC_final_model<-glm(repay_fail~ term + sub_grade + log(annual_inc) + purpose + 
+    inq_last_6mths + pub_rec + revol_util  + emp_length.f + 
+    credit_length,  data = train.AIC, family = binomial(link ="logit"),maxit=100)
+
+step_AIC.clog<-glm(repay_fail~ term + sub_grade + log(annual_inc) + purpose + 
+    inq_last_6mths + pub_rec + revol_util + total_acc + emp_length.f + 
+    credit_length,  data = train.AIC, family = binomial(link ="cloglog"),maxit=100)
+
+step_AIC.probit<-glm(repay_fail~ term + sub_grade + log(annual_inc) + purpose + 
+    inq_last_6mths + pub_rec + revol_util + total_acc + emp_length.f + 
+    credit_length,  data = train.AIC, family = binomial(link ="probit"),maxit=100)
+```
+
+
+#### Find the optimum cut off of the data
+
+We have used a function called optimalCutoff by InfomationValue package. This method able to defines the optimal cut-point value as the value whose sensitivity and specificity are the closest to the value of the area under the ROC curve and the absolute value of the difference between the sensitivity and specificity values is minimum. By using this method we are able to obtain the optimum accuracy.
+
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+set.seed(69)
+predicted.data <- data.frame(
+default.prob=AIC.final$fitted.values,default=train.AIC$repay_fail)
+
+predicted.data$actuals <-factor(predicted.data$default, labels =c(0,1))
+
+optCutOff.AIC <- optimalCutoff(predicted.data$actuals, predicted.data$default.prob)
+optCutOff.AIC
+```
+
+The optimal cutoff of our threshold is to set p = 0.5696083. 
+
+
+# Comparing 3 different link functions 
+
+We will be comparing 3 different link functions, "logit", "cloglog" and "probit". As there will be a comparison of accuracy,confusion matrix, Area under the Curve (AUC) and Gini value. The best link function model will be selected that obtain optimal accuracy, AUC and GINI. 
+
+##################
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+set.seed(69)
+### Confusion Matrix
+pred.aic.log <- predict(AIC.final,test.AIC, type = "response")
+pred.aic.clog<-predict(step_AIC.clog,test.AIC, type = "response")
+pred.aic.probit<-predict(step_AIC.probit,test.AIC, type = "response")
+
+# Confusion Matrix "logit"
+preds.for.50 = ifelse(pred.aic.log>optCutOff.AIC,1,0)
+table.aic.log<- table(Predicted = preds.for.50, Actual= test.AIC$repay_fail)
+table.aic.log
+
+# Confusion Matrix "clog"
+preds.for.clog = ifelse(pred.aic.clog>optCutOff.AIC,1,0)
+table.aic.clog<- table(Predicted = preds.for.clog, Actual= test.AIC$repay_fail)
+table.aic.clog
+
+# Confusion Matrix "probit"
+preds.for.probit = ifelse(pred.aic.probit>optCutOff.AIC,1,0)
+table.aic.probit<- table(Predicted = preds.for.probit, Actual= test.AIC$repay_fail)
+table.aic.probit
+```
+
+These are the confusion matrix from different link functions by "logit", "cloglog" and "probit" respectively. We can observed that "logit" has a higher accuracy by 50% in specificity here.
+
+```{r,message=FALSE, echo=FALSE, warning=FALSE}
+### Accuracy Test of our model by different link function
+# "logit"
+accuracy.aic.logit<- sum(diag(table.aic.log))/sum(table.aic.log)
+
+
+# "cloglog"
+accuracy.aic.clog<- sum(diag(table.aic.clog))/sum(table.aic.clog)
+
+
+# "probit"
+accuracy.aic.probit<- sum(diag(table.aic.probit))/sum(table.aic.probit)
+
+```
+
+### ROC and AUC curve
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+set.seed(69)
+# Prediction on the testing set
+# Step Initial Model
+
+# Confusion Matrix
+
+#log
+prediction.aic.log<-prediction(pred.aic.log,test$repay_fail)
+roc.aic.log<- roc(test$repay_fail, pred.aic.log)
+gini.aic.log<- 2*roc.aic.log$auc-1
+gini.aic.log
+perf.AIC.log <- performance(prediction.aic.log,"tpr","fpr")
+
+
+# clog
+prediction.aic.clog<-prediction(pred.aic.clog,test$repay_fail)
+roc.aic.clog<- roc(test$repay_fail, pred.aic.clog)
+roc.aic.clog
+gini.aic.clog<- 2*roc.aic.clog$auc-1
+gini.aic.clog
+perf.AIC.clog <- performance(prediction.aic.clog,"tpr","fpr")
+
+
+# probit
+prediction.aic.probit<-prediction(pred.aic.probit,test$repay_fail)
+roc.aic.probit<- roc(test$repay_fail, pred.aic.probit)
+roc.aic.probit
+gini.aic.probit<- 2*roc.aic.probit$auc-1
+gini.aic.probit
+perf.AIC.probit <- performance(prediction.aic.probit,"tpr","fpr")
+
+plot(perf.AIC.log, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.aic.log$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.aic.log,3)))
+par(pty="s") # to remove both left and right empty data
+
+
+# Creating a results table for 3 link function
+link.function <- c("Logit","Cloglog","Probit")
+GINI.value<- c(gini.aic.log,gini.aic.clog,gini.aic.probit)
+Accuracy<- c(accuracy.aic.logit,accuracy.aic.clog,accuracy.aic.probit)
+AUC<- c(roc.aic.log$auc,roc.aic.clog$auc, roc.aic.probit$auc)
+StepAIC.results<-data.frame(link.function, AUC,GINI.value, Accuracy)
+
+knitr::kable(StepAIC.results, col.names = c("StepAIC link function","AUC"," Gini Score", "Accuracy"))
+```
+
+As we observed the table above 3 of the link functions share a very similar AUC and GINI score by apprimately 0.70 and 0.4 respectively. However, "logit" link function model holds a higher accuracy than others with approximately 85% accuracy. Therefore, "logit" link function model will be choosen as our final model by stepAIC.
+
+### Validating stepAIC model
+
+A 10-fold cross validation have been used to validate our final stepAIC model. A ROC value will be determine from cross validation and will be compared to the AUC of our model.
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+# # load the library
+# library(mlbench)
+# library(caret)
+# library(doParallel)
+# library(gbm)
+# set.seed(69)
+# 
+# # Installation of the doSNOW parallel library with all dependencies
+# doInstall <- TRUE # Change to FALSE if you don't want packages installed.
+# toInstall <- c("doSNOW") 
+# if((doInstall) && (!is.element(toInstall, installed.packages()[,1])))
+# {
+#     cat("Please install required package. Select server:"); chooseCRANmirror();
+#     install.packages(toInstall, dependencies = c("Depends", "Imports")) 
+# }
+# 
+# # load doSnow and (parallel for CPU info) library
+# library(doSNOW)
+# library(parallel)
+# 
+# # For doSNOW one can increase up to 128 nodes
+# # Each node requires 44 Mbyte RAM under WINDOWS.
+# 
+# # detect cores with parallel() package
+# nCores <- detectCores(logical = FALSE)
+# cat(nCores, " cores detected.")
+# 
+# # detect threads with parallel()
+# nThreads<- detectCores(logical = TRUE)
+# cat(nThreads, " threads detected.")
+# 
+# # Create doSNOW compute cluster (try 64)
+# # One can increase up to 128 nodes
+# # Each node requires 44 Mbyte RAM under WINDOWS.
+# cluster = makeCluster(nThreads, type = "SOCK")
+# class(cluster);
+# 
+# # register the cluster
+# registerDoSNOW(cluster)
+# 
+# #get info
+# getDoParWorkers(); getDoParName();
+# 
+# # insert parallel computation here
+#         
+# # stop cluster and remove clients
+# stopCluster(cluster); print("Cluster stopped.")
+# 
+# # insert serial backend, otherwise error in repetetive tasks
+# registerDoSEQ()
+# 
+# # clean up a bit.
+# invisible(gc); remove(nCores); remove(nThreads); remove(cluster); 
+# 
+# # END
+# 
+# # prepare training scheme, 10 fold-cross validation.
+# control <- trainControl(method="cv", number=10 ,classProbs = T,summaryFunction = twoClassSummary)
+# 
+# # fix the parameters of the algorithm
+# levels(train.AIC$repay_fail) <- c("notDef", "Def")
+# 
+# model<- train( repay_fail~term + sub_grade + log(annual_inc) + purpose + 
+#     inq_last_6mths + pub_rec + revol_util  + emp_length.f + 
+#     credit_length,data = train.AIC, method="glm",metric="ROC",family= binomial, trControl=control )
+# print(model)
+```
+
+The output results of AUC by cross validation show a very similar results as the AUC of our final stepAIC model. Therefore, we can conclude that our final model have been validated.
+
+# Uncertainty of the stepAIC model
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+# 95% CI 
+stepAIC.logit.CI<-exp(confint.default(AIC.final))
+
+library(GGally)
+ggcoef((broom::tidy(AIC.final, conf.int = TRUE)), color= "red",sort = "ascending", errorbar_size = 0.5)
+```
+
+*CI Coefficients
+
+
+###############
+
+
+### 4.2 Random Forest Variable Selection for GLMs
+Random forests are able to decect interactions between variables which may add value to a credit scorecard. All ratios can be such interaction terms (Sharma et al, 2009). By utilising random forests it allows the most important of these interaction terms to be added to the logistic regression.
+#### Variable Selection
+Initially, variables are added to the model in order of importance to see the effect of each variable to AUC. This was cross validated using the training data using k-folds(k=5).  From this, a cut off number of variables was decided, and a generalised linear model 
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+set.seed(420)
+
+
+col_idx <- grep("repay_fail", names(train.rf))
+train.rf <- train.rf[, c((1:ncol(train.rf))[-col_idx],col_idx)]
+
+
+
+set.seed(420)
+k<-5
+folds<- createFolds(train.rf$repay_fail, k = k)
+
+fold_auc.cl = list()
+fold_auc.lg = list()
+fold_auc.pr = list()
+impScores<-list()
+
+selected = list()
+for (i in seq_along(folds)) {
+
+  # split for fold i  
+  trn_fold = train.rf[-folds[[i]], ]
+  val_fold = train.rf[folds[[i]], ]
+
+  # screening for fold i  
+  fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=trn_fold)
+  imp.rf<-varimp(fit_rf)
+  
+  
+  
+  
+  selected[[i]] = order(imp.rf, decreasing = TRUE)
+  
+  var_auc.cl = rep(0, length(selected[[i]]))
+  var_auc.lg = rep(0, length(selected[[i]]))
+  var_auc.pr = rep(0, length(selected[[i]]))
+  x2<- rep(0, length(selected[[i]]))
+  for(j in 1:length(selected[[i]])){
+      
+      trn_fold_screen = trn_fold[ , c(19, selected[[i]][1:j])]
+      val_fold_screen = val_fold[ , c(19, selected[[i]][1:j])]
+    
+      # auc for fold i  
+      add_log_mod.cl = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=cloglog))
+      add_log_prob.cl = predict(add_log_mod.cl, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.cl = ifelse(add_log_prob.cl > 0.5, yes = 1, no = 0)
+      var_auc.cl[j] = roc(val_fold_screen$repay_fail, add_log_prob.cl)$auc
+      add_log_mod.lg = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=logit))
+      add_log_prob.lg = predict(add_log_mod.lg, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.lg = ifelse(add_log_prob.lg > 0.5, yes = 1, no = 0)
+      var_auc.lg[j] =   roc(val_fold_screen$repay_fail, add_log_prob.lg)$auc
+      add_log_mod.pr = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=probit))
+      add_log_prob.pr = predict(add_log_mod.pr, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.pr = ifelse(add_log_prob.pr > 0.5, yes = 1, no = 0)
+      var_auc.pr[j] =   roc(val_fold_screen$repay_fail, add_log_prob.pr)$auc
+      
+      
+      x2[j]<-sum(imp.rf[selected[[i]][1:j]])
+      
+      
+  }
+  
+  fold_auc.cl[[i]] = var_auc.cl 
+  fold_auc.lg[[i]] = var_auc.lg 
+  fold_auc.pr[[i]] = var_auc.pr 
+  impScores[[i]]=x2
+}
+
+# report all 10 validation fold errors
+x<-1:length(selected[[1]])
+
+for(i in 1:k){
+impScores[[i]]<-impScores[[i]]/max(impScores[[i]])
+}
+imp.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+impScores[[j]][i]
+  }
+  imp.mean[i]<-a/k
+}
+
+
+
+rf.fold_auc.cl.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.cl[[j]][i]
+  }
+  rf.fold_auc.cl.mean[i]<-a/k
+}
+rf.fold_auc.cl.mean
+
+rf.fold_auc.lg.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.lg[[j]][i]
+  }
+  rf.fold_auc.lg.mean[i]<-a/k
+}
+rf.fold_auc.lg.mean
+
+rf.fold_auc.pr.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.pr[[j]][i]
+  }
+  rf.fold_auc.pr.mean[i]<-a/k
+}
+rf.fold_auc.pr.mean
+
+```
+
+
+
+
+```{r}
+
+plot(x, rf,fold_auc.cl.mean, type = "l", lty = 1,col = "red", ylab="AUC",xlab="# of vars")
+lines(x,rf.fold_auc.lg.mean, type = "l",col = "blue")
+lines(x,rf.fold_auc.pr.mean, type = "l",col = "green")
+title("AUC vs # of Variables (x) in the model")
+
+plot(imp.mean, rf.fold_auc.cl.mean, type = "l", lty = 1,col = "red", ylab="AUC",xlab="importance (%)")
+lines(imp.mean,rf.fold_auc.lg.mean, type = "l",col = "blue")
+lines(imp.mean,rf.fold_auc.pr.mean, type = "l",col = "green")
+title("imp score (%) vs AUC - mean")
+
+for(i in 1:k){
+  plot(impScores[[i]], fold_auc.cl[[i]], type = "l", lty = 1,col = "red", ylab="AUC",xlab="importance (%)")
+  lines(impScores[[i]],fold_auc.lg[[i]], type = "l",col = "blue")
+  lines(impScores[[i]],fold_auc.pr[[i]], type = "l",col = "green")
+  title(paste("imp score (%) vs AUC - fold(", i,")",sep=""))
+}
+
+boxplot(fold_auc.cl.mean,fold_auc.lg.mean,fold_auc.pr.mean,names= c("cloglog","logit","probit"),  ylab="AUC" )
+
+
+```
+
+We see that 95% of importance appears to provide most of the information to the model without overcomplicating the model.
+
+#### Random Forest Assisted GLM
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+set.seed(420)
+
+
+fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf)
+imp.rf<-varimp(fit_rf)
+imp.rf<-imp.rf[order(imp.rf, decreasing = TRUE)]
+sum(imp.rf)*0.95
+i<-0
+j<-1
+while(i<sum(imp.rf)*0.95){
+  i = i+imp.rf[j]
+  print(imp.rf[j])
+  j = j+1
+}
+
+fit.rf.logit <- glm(data = train.rf,
+                    repay_fail~log(annual_inc)+sub_grade+int_rate+term+purpose+revol_util+log(loan_amnt)+credit_length+pub_rec+mths_since_last_delinq+verification_status, 
+                    family = binomial(link=logit))
+
+fit.rf.cloglog<- glm(data = train.rf,
+                     repay_fail~log(annual_inc)+sub_grade+int_rate+term+purpose+revol_util+log(loan_amnt)+credit_length+pub_rec+mths_since_last_delinq+verification_status, 
+                     family = binomial(link=cloglog))
+
+fit.rf.probit<- glm(data = train.rf,
+                    repay_fail~log(annual_inc)+sub_grade+int_rate+term+purpose+revol_util+log(loan_amnt)+credit_length+pub_rec+mths_since_last_delinq+verification_status, 
+                    family = binomial(link=probit))
+
+
+fit.rf.logit.p<-predict(fit.rf.logit,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.logit.p)$auc
+
+fit.rf.cloglog.p<-predict(fit.rf.cloglog,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.cloglog.p)$auc
+
+fit.rf.probit.p<-predict(fit.rf.probit,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.probit.p)$auc
+
+fit.rf<-fit.rf.probit
+
+rf.glm.p<-predict(fit.rf,test, type = "response")
+preds.for.50 = factor(ifelse(rf.glm.p>0.5,1,0))
+table.rf<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.rf
+
+rf.glm.pred<-prediction(rf.glm.p,test$repay_fail)
+roc.rf <- roc(test$repay_fail, rf.glm.p)
+roc.rf
+gini.rf<- 2*roc.rf$auc-1
+gini.rf
+perf.rf.1 <- performance(rf.glm.pred,"tpr","fpr")
+
+# ROC plot
+plot(perf.rf.1, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.rf$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.rf,3)))
+par(pty="s") # to remove both left and right empty data
+
+# Accuracy
+accuracy.rf <- sum(diag(table.rf))/sum(table.rf)
+accuracy.rf
+
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+Importance<-imp.rf
+barchart(Importance)
+```
+
+After building our 3 models we select the probit model as it has the highest auc.
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+##best model considering second order terms from trial and error
+kable(c(roc(train.rf$repay_fail, fit.rf.logit.p,roc(train.rf$repay_fail, fit.rf.probit.p)$auc)$auc,roc(train.rf$repay_fail, fit.rf.cloglog.p)$auc,))
+
+
+
+
+
+fit.rf.2<- glm(data = train.rf,
+                    repay_fail~log(annual_inc)+sub_grade+int_rate+term+purpose+revol_util+log(loan_amnt)+credit_length+pub_rec+mths_since_last_delinq+verification_status +
+                 log(loan_amnt):log(annual_inc) + annual_inc:revol_util + credit_length:mths_since_last_delinq + loan_amnt:mths_since_last_delinq, 
+                    family = binomial(link=probit))
+
+fit.rf.2.p<-predict(fit.rf.2,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.2.p)$auc
+
+ggcoef((broom::tidy(fit.rf.2, conf.int = TRUE)), color= "red",sort = "ascending", errorbar_size = 0.5)
+```
+
+A model was then constructed adding second order terms using trial and error.
+
+#### Downsampling
+```{r rfdown, warning=FALSE, echo=FALSE, message=FALSE}
+##down sampling
+set.seed(420)
+col_idx <- grep("repay_fail", names(train.rf))
+train.rf <- train.rf[, c((1:ncol(train.rf))[-col_idx],col_idx)]
+
+
+
+k<-5
+folds<- createFolds(train.rf$repay_fail, k = k)
+
+d.fold_auc.cl = list()
+d.fold_auc.lg = list()
+d.fold_auc.pr = list()
+d.impScores = list()
+
+selected = list()
+for (i in seq_along(folds)) {
+
+  # split for fold i  
+  trn_fold = train.rf[-folds[[i]], ]
+  trn_fold<-downSample(trn_fold,trn_fold$repay_fail)
+  trn_fold<-trn_fold[,-ncol(trn_fold)]
+
+  val_fold = train.rf[folds[[i]], ]
+
+  # screening for fold i  
+  fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=trn_fold)
+  imp.rf<-varimp(fit_rf)
+  selected[[i]] = order(imp.rf, decreasing = TRUE)
+  
+  var_auc.cl = rep(0, length(selected[[i]]))
+  var_auc.lg = rep(0, length(selected[[i]]))
+  var_auc.pr = rep(0, length(selected[[i]]))
+  x2<- rep(0, length(selected[[i]]))
+  for(j in 1:length(selected[[i]])){
+      
+      trn_fold_screen = trn_fold[ , c(19, selected[[i]][1:j])]
+      val_fold_screen = val_fold[ , c(19, selected[[i]][1:j])]
+    
+      # auc for fold i  
+      add_log_mod.cl = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=cloglog))
+      add_log_prob.cl = predict(add_log_mod.cl, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.cl = ifelse(add_log_prob.cl > 0.5, yes = 1, no = 0)
+      var_auc.cl[j] = roc(val_fold_screen$repay_fail, add_log_prob.cl)$auc
+      add_log_mod.lg = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=logit))
+      add_log_prob.lg = predict(add_log_mod.lg, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.lg = ifelse(add_log_prob.lg > 0.5, yes = 1, no = 0)
+      var_auc.lg[j] =   roc(val_fold_screen$repay_fail, add_log_prob.lg)$auc
+      add_log_mod.pr = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=probit))
+      add_log_prob.pr = predict(add_log_mod.pr, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.pr = ifelse(add_log_prob.pr > 0.5, yes = 1, no = 0)
+      var_auc.pr[j] =   roc(val_fold_screen$repay_fail, add_log_prob.pr)$auc
+      
+      
+      x2[j]<-sum(imp.rf[selected[[i]][1:j]])
+      
+      
+  }
+  
+  d.fold_auc.cl[[i]] = var_auc.cl 
+  d.fold_auc.lg[[i]] = var_auc.lg 
+  d.fold_auc.pr[[i]] = var_auc.pr 
+  d.impScores[[i]]=x2
+}
+
+# report all 10 validation fold errors
+x<-1:length(selected[[1]])
+
+d.fold_auc.cl.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+d.fold_auc.cl[[j]][i]
+  }
+ d.fold_auc.cl.mean[i]<-a/k
+}
+d.fold_auc.cl.mean
+
+d.fold_auc.lg.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+d.fold_auc.lg[[j]][i]
+  }
+  d.fold_auc.lg.mean[i]<-a/k
+}
+d.fold_auc.lg.mean
+
+d.fold_auc.pr.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+d.fold_auc.pr[[j]][i]
+  }
+  d.fold_auc.pr.mean[i]<-a/k
+}
+d.fold_auc.pr.mean
+
+for(i in 1:k){
+d.impScores[[i]]<-d.impScores[[i]]/max(d.impScores[[i]])
+}
+d.imp.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+d.impScores[[j]][i]
+  }
+  d.imp.mean[i]<-a/k
+}
+
+
+
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+plot(x, d.fold_auc.cl.mean, type = "l", lty = 1,col = "red", ylab="AUC",xlab="# of vars")
+lines(x,d.fold_auc.lg.mean, type = "l",col = "blue")
+lines(x,d.fold_auc.pr.mean, type = "l",col = "green")
+title("AUC vs # of Variables (x) in the model")
+
+plot(d.imp.mean, d.fold_auc.cl.mean, type = "l", lty = 1,col = "red", ylab="AUC",xlab="importance (%)")
+lines(d.imp.mean,d.fold_auc.lg.mean, type = "l",col = "blue")
+lines(d.imp.mean,d.fold_auc.pr.mean, type = "l",col = "green")
+title("imp score (%) vs AUC - mean")
+
+for(i in 1:k){
+  plot(d.impScores[[i]], d.fold_auc.cl[[i]], type = "l", lty = 1,col = "red", ylab="AUC",xlab="importance (%)")
+  lines(d.impScores[[i]],d.fold_auc.lg[[i]], type = "l",col = "blue")
+  lines(d.impScores[[i]],d.fold_auc.pr[[i]], type = "l",col = "green")
+  title(paste("imp score (%) vs AUC - fold(", i,")",sep=""))
+}
+
+boxplot(d.fold_auc.cl.mean,d.fold_auc.lg.mean,d.fold_auc.pr.mean,names= c("cloglog","logit","probit"),  ylab="AUC" )
+
+
+```
+
+Both up and down sampling have been shown to improve AUC when applied to credit risk modelling, with upsampling in general being more effective. (Stelzer, A. 2019) Therefore we trialed these models on the data as well.
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+
+set.seed(420)
+train.rf.d<-downSample(train.rf,train.rf$repay_fail)
+train.rf.d<-train.rf.d[,-ncol(train.rf.d)]
+
+
+fit_rf.d<-cforest(repay_fail~.,
+                  control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf.d)
+imp.d<-varimp(fit_rf.d)
+imp.d<-imp.d[order(imp.d, decreasing = TRUE)]
+sum(imp.d)*0.95
+i<-0
+j<-1
+while(i<sum(imp.d)*0.95){
+  i = i+imp.d[j]
+  print(imp.d[j])
+  j = j+1
+}
+
+fit.rf.logit.d <- glm(data = train.rf.d ,
+                      repay_fail~int_rate+sub_grade+term+revol_util+purpose+
+                        log(annual_inc)+inq_last_6mths+credit_length+mths_since_last_delinq+log(loan_amnt), family = binomial(link=logit))
+
+fit.rf.cloglog.d <- glm(data = train.rf.d ,
+                      repay_fail~int_rate+sub_grade+term+revol_util+purpose+
+                        log(annual_inc)+inq_last_6mths+credit_length+mths_since_last_delinq+log(loan_amnt),
+                      family = binomial(link=cloglog))
+
+fit.rf.probit.d<- glm(data = train.rf.d ,
+                      repay_fail~int_rate+sub_grade+term+revol_util+purpose+
+                        log(annual_inc)+inq_last_6mths+credit_length+mths_since_last_delinq+log(loan_amnt), family = binomial(link=probit))
+
+fit.rf.logit.d.p <- predict(fit.rf.logit.d,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.logit.d.p)$auc
+
+fit.rf.cloglog.d.p<-predict(fit.rf.cloglog.d,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.cloglog.d.p)$auc
+
+fit.rf.probit.d.p<-predict(fit.rf.probit.d,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.probit.d.p)$auc
+
+fit.rf.glm.d<-fit.rf.logit.d
+
+pred.d<-predict(fit.rf.glm.d,test, type = "response")
+preds.for.50 = factor(ifelse(pred.d>0.5,1,0))
+rf.d.table<- table(Predicted = preds.for.50, Actual = test$repay_fail)
+rf.d.table
+
+prediction.d<-prediction(pred.d,test$repay_fail)
+roc.rf.d <- roc(test$repay_fail, pred.d)
+roc.rf.d
+gini.rf.d<- 2*roc.rf.d$auc-1
+gini.rf.d
+perf.d <- performance(prediction.d,"tpr","fpr")
+
+
+# ROC plot
+plot(perf.d, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.rf.d$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.rf.d,3)))
+par(pty="s") # to remove both left and right empty data
+
+# Accuracy
+accuracy.d <- sum(diag(rf.d.table))/sum(rf.d.table)
+accuracy.d
+
+
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+Importance<-imp.d
+barchart(Importance)
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+ggcoef((broom::tidy(fit.rf.glm.d, conf.int = TRUE)), color= "red",sort = "ascending", errorbar_size = 0.5)
+```
+
+
+
+### Upsampling
+```{r  warning=FALSE, echo=FALSE, message=FALSE}
+
+
+set.seed(420)
+col_idx <- grep("repay_fail", names(train.rf))
+train.rf <- train.rf[, c((1:ncol(train.rf))[-col_idx],col_idx)]
+
+k<-5
+folds<- createFolds(train.rf$repay_fail, k = k)
+
+u.fold_auc.cl = list()
+u.fold_auc.lg = list()
+u.fold_auc.pr = list()
+u.impScores = list()
+
+selected = list()
+for (i in seq_along(folds)) {
+
+  # split for fold i  
+  trn_fold = train.rf[-folds[[i]], ]
+  trn_fold<-upSample(trn_fold,trn_fold$repay_fail)
+  trn_fold<-trn_fold[,-ncol(trn_fold)]
+
+  val_fold = train.rf[folds[[i]], ]
+
+  # screening for fold i  
+  fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=trn_fold)
+  imp.rf<-varimp(fit_rf)
+  selected[[i]] = order(imp.rf, decreasing = TRUE)
+  
+  var_auc.cl = rep(0, length(selected[[i]]))
+  var_auc.lg = rep(0, length(selected[[i]]))
+  var_auc.pr = rep(0, length(selected[[i]]))
+  x2<- rep(0, length(selected[[i]]))
+  for(j in 1:length(selected[[i]])){
+      
+      trn_fold_screen = trn_fold[ , c(19, selected[[i]][1:j])]
+      val_fold_screen = val_fold[ , c(19, selected[[i]][1:j])]
+    
+      # auc for fold i  
+      add_log_mod.cl = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=cloglog))
+      add_log_prob.cl = predict(add_log_mod.cl, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.cl = ifelse(add_log_prob.cl > 0.5, yes = 1, no = 0)
+      var_auc.cl[j] = roc(val_fold_screen$repay_fail, add_log_prob.cl)$auc
+      add_log_mod.lg = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=logit))
+      add_log_prob.lg = predict(add_log_mod.lg, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.lg = ifelse(add_log_prob.lg > 0.5, yes = 1, no = 0)
+      var_auc.lg[j] =   roc(val_fold_screen$repay_fail, add_log_prob.lg)$auc
+      add_log_mod.pr = glm(repay_fail ~ ., data = trn_fold_screen, 
+                           family = binomial(link=probit))
+      add_log_prob.pr = predict(add_log_mod.pr, newdata = val_fold_screen, 
+                                type = "response")
+      add_log_pred.pr = ifelse(add_log_prob.pr > 0.5, yes = 1, no = 0)
+      var_auc.pr[j] =   roc(val_fold_screen$repay_fail, add_log_prob.pr)$auc
+      
+      
+      x2[j]<-sum(imp.rf[selected[[i]][1:j]])
+      
+      
+  }
+  
+  u.fold_auc.cl[[i]] = var_auc.cl 
+  u.fold_auc.lg[[i]] = var_auc.lg 
+  u.fold_auc.pr[[i]] = var_auc.pr 
+  u.impScores[[i]]=x2
+}
+
+# report all 10 validation fold errors
+x<-1:length(selected[[1]])
+
+u.fold_auc.cl.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+u.fold_auc.cl[[j]][i]
+  }
+ u.fold_auc.cl.mean[i]<-a/k
+}
+u.fold_auc.cl.mean
+
+u.fold_auc.lg.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+u.fold_auc.lg[[j]][i]
+  }
+  u.fold_auc.lg.mean[i]<-a/k
+}
+u.fold_auc.lg.mean
+
+u.fold_auc.pr.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+u.fold_auc.pr[[j]][i]
+  }
+  u.fold_auc.pr.mean[i]<-a/k
+}
+u.fold_auc.pr.mean
+
+for(i in 1:k){
+u.impScores[[i]]<-u.impScores[[i]]/max(u.impScores[[i]])
+}
+u.imp.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+u.impScores[[j]][i]
+  }
+  u.imp.mean[i]<-a/k
+}
+```
+
+
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+plot(x, u.fold_auc.cl.mean, type = "l", lty = 1,col = "red", ylab="AUC",xlab="# of vars")
+lines(x,u.fold_auc.lg.mean, type = "l",col = "blue")
+lines(x,u.fold_auc.pr.mean, type = "l",col = "green")
+title("AUC vs # of Variables (x) in the model")
+
+plot(u.imp.mean, u.fold_auc.cl.mean, type = "l", lty = 1,col = "red", ylab="AUC",xlab="importance (%)")
+lines(u.imp.mean,u.fold_auc.lg.mean, type = "l",col = "blue")
+lines(u.imp.mean,u.fold_auc.pr.mean, type = "l",col = "green")
+title("imp score (%) vs AUC - mean")
+
+for(i in 1:k){
+  plot(u.impScores[[i]], u.fold_auc.cl[[i]], type = "l", lty = 1,col = "red", ylab="AUC",xlab="importance (%)")
+  lines(u.impScores[[i]],u.fold_auc.lg[[i]], type = "l",col = "blue")
+  lines(u.impScores[[i]],u.fold_auc.pr[[i]], type = "l",col = "green")
+  title(paste("imp score (%) vs AUC - fold(", i,")",sep=""))
+}
+
+boxplot(u.fold_auc.cl.mean,u.fold_auc.lg.mean,u.fold_auc.pr.mean,names= c("cloglog","logit","probit"),  ylab="AUC" )
+
+```
+
+#### Confidence Interval
+
+```{r, warning=FALSE, echo=FALSE, message=FALSE}
+##up sampling
+set.seed(420)
+train.rf.u<-upSample(train.rf,train.rf$repay_fail)
+train.rf.u<-train.rf.u[,-ncol(train.rf.u)]
+
+
+fit_rf.u<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf.u)
+imp<-varimp(fit_rf.u)
+imp<-imp[order(imp, decreasing = TRUE)]
+sum(imp)*0.95
+i<-0
+j<-1
+while(i<sum(imp)*0.95){
+  i = i+imp[j]
+  print(imp[j])
+  j = j+1
+}
+# 
+
+
+fit.rf.logit.u<- glm(data = train.rf.u,
+                     repay_fail~sub_grade+int_rate+revol_util+purpose+log(annual_inc)+
+                       term+inq_last_6mths+dti+home_ownership+log(loan_amnt)+
+                       mths_since_last_delinq+verification_status+total_acc+
+                       credit_length+revol_bal, 
+                     family = binomial(link=logit))
+
+fit.rf.cloglog.u<- glm(data = train.rf.u,
+                      repay_fail~sub_grade+int_rate+revol_util+purpose+log(annual_inc)+
+                         term+inq_last_6mths+dti+home_ownership+log(loan_amnt)+
+                        mths_since_last_delinq+verification_status+total_acc+
+                        credit_length+revol_bal,
+                      family = binomial(link=cloglog))
+
+fit.rf.probit.u<- glm(data = train.rf.u,
+                      repay_fail~sub_grade+int_rate+revol_util+purpose+log(annual_inc)+
+                        term+inq_last_6mths+dti+home_ownership+log(loan_amnt)+
+                        mths_since_last_delinq+verification_status+total_acc+
+                        credit_length+revol_bal,
+                      family = binomial(link=probit))
+
+fit.rf.logit.u.p<-predict(fit.rf.logit.u,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.logit.u.p)$auc
+
+fit.rf.cloglog.u.p<-predict(fit.rf.cloglog.u,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.cloglog.u.p)$auc
+
+fit.rf.probit.u.p<-predict(fit.rf.probit.u,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.probit.u.p)$auc
+
+fit.u <- fit.rf.logit.u
+
+pred.u<-predict(fit.u,test, type = "response")
+preds.for.50 = factor(ifelse(pred.u > 0.5,1,0))
+table.u<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.u
+
+prediction.u<-prediction(pred.u,test$repay_fail)
+roc.u <- roc(test$repay_fail, pred.u)
+roc.u
+gini.u<- 2*roc.u$auc-1
+gini.u
+perf.u <- performance(prediction.u,"tpr","fpr")
+
+# ROC plot
+plot(perf.u, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.u$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.u,3)))
+par(pty="s") # to remove both left and right empty data
+
+# Accuracy
+acuuracy.u <- sum(diag(table.u))/sum(table.u)
+acuuracy.u
+
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+Importance<-imp.u
+barchart(Importance)
+```
+
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+ggcoef((broom::tidy(fit.u, conf.int = TRUE)), color= "red",sort = "ascending", errorbar_size = 0.5)
+```
+
+#### Random Forest Results
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+# col_idx <- grep("repay_fail", names(test))
+# test <- test[, c((1:ncol(test))[-col_idx],col_idx)]
+# 
+# pred_rf<-predict(fit_rf,test, type = "response",OOB=TRUE)
+# preds.for.50 = factor(ifelse(pred_rf > 0.5,1,0))
+# table_rf<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+# table_rf
+# 
+# prediction_rf<-prediction(pred_rf,test$repay_fail)
+# roc_rf <- roc(test$repay_fail, pred_rf)
+# roc_rf
+# gini_rf<- 2*roc_rf$auc-1
+# gini_rf
+# perf_rf <- performance(prediction.u,"tpr","fpr")
+# 
+# # ROC plot
+# plot(perf_rf, col="green")
+# 
+# legend(x = "bottomright", legend = paste(c("AUC = "),round(roc_rf$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+# title(main=paste(" Gini = ", round(gini_rf,3)))
+# par(pty="s") # to remove both left and right empty data
+# 
+# # Accuracy
+# acuuracy_rf <- sum(diag(table_rf))/sum(table_rf)
+# acuuracy_rf
+
+```
+
+#### Confidence Interval 
+
+#### Lasso
+Lasso is a form of penalised logistic regression in which there is a penality to the logistic model for having too many variables. In lasso regression, the coefficients of less contributative variabes are set to 0 and only the most significant values are kept in the model.
+```{r lasso, warning=FALSE, echo=FALSE, message=FALSE}
+x <- model.matrix(repay_fail~.,train.las)[,-1]
+#convert class to numerical variable
+y <- train.las$repay_fail
+
+#perform grid search to find optimal value of lambda
+#family= binomial => logistic regression, alpha=1 => lasso
+# check docs to explore other type.measure options
+cv.out <- cv.glmnet(x,y,alpha=1,family='binomial',type.measure = 'auc',nfolds=10)
+#plot result
+plot(cv.out)
+
+
+#min value of lambda
+lambda_min <- cv.out$lambda.min
+#best value of lambda
+lambda_1se <- cv.out$lambda.1se
+#regression coefficients
+coef(cv.out,s=lambda_1se)
+
+
+#get test data
+x_test <- model.matrix(repay_fail~.,test)[,-1]
+y_test <- test$repay_fail
+#predict class, type="class"
+lasso_prob <- predict(cv.out,newx = x_test,s='lambda.1se',type='response')
+#translate probabilities to predictions
+lasso_predict <- rep(0,nrow(x_test))
+lasso_predict[lasso_prob>.5] <- 1
+#confusion matrix
+table(pred=lasso_predict,true=y_test)
+#accuracy
+mean(lasso_predict==y_test)
+
+# Confusion Matrix
+p.las<-predict(cv.out,newx = x_test,s='lambda.1se',type='response')
+preds.for.50 = factor(ifelse(p.las>0.5,1,0))
+table.las<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.las
+
+pred.las<-prediction(p.las,test$repay_fail)
+roc.las <- roc(test$repay_fail, p.las)
+roc.las
+gini.las<- 2*roc.las$auc-1
+gini.las
+perf.las <- performance(pred.las,"tpr","fpr")
+
+
+# ROC Plot
+plot(perf.las, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.las$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.las,3)))
+par(pty="s") # to remove both left and right empty data
+
+# Accuracy
+accuracy.las <- sum(diag(table.las))/sum(table.las)
+accuracy.las
+
+```
+
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+plot(cv.out)
+```
+ 
+The first plot displays the AUC according to the log of lambda. The first dashed line indicates the exact value of lambda that maximises AUC. The second dashed line shows the value of lambda that gives the simplest model that is within one standard error of the optimal lambda.
+```{r warning=FALSE, echo=FALSE, message=FALSE}
+coef(cv.out,s=lambda_min)
+coef(cv.out,s=lambda_1se)
+
+```
+Comparing the two lists of coefficients we see that the optimal lambda contains all variables but 2 (sub_gradeA5 and loan_amnt), whereas the simplier model contains only 15 variables.
+
+
+```{r lassomin warning=FALSE, echo=FALSE, message=FALSE}
+
+# Confusion Matrix
+p.las<-predict(cv.out,newx = x_test,s='lambda.min',type='response')
+preds.for.50 = factor(ifelse(p.las>0.5,1,0))
+table.las<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.las
+
+pred.las<-prediction(p.las,test$repay_fail)
+roc.las <- roc(test$repay_fail, p.las)
+roc.las
+gini.las<- 2*roc.las$auc-1
+gini.las
+perf.las.min <- performance(pred.las,"tpr","fpr")
+
+
+# ROC Plot
+plot(perf.las, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.las$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.las,3)))
+par(pty="s") # to remove both left and right empty data
+
+# Accuracy
+accuracy.las <- sum(diag(table.las))/sum(table.las)
+accuracy.las
+```
+
+```{r lasso1se warning=FALSE, echo=FALSE, message=FALSE}
+
+
+# Confusion Matrix
+p.las<-predict(cv.out,newx = x_test,s='lambda.1se',type='response')
+preds.for.50 = factor(ifelse(p.las>0.5,1,0))
+table.las<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.las
+
+pred.las<-prediction(p.las,test$repay_fail)
+roc.las <- roc(test$repay_fail, p.las)
+roc.las
+gini.las<- 2*roc.las$auc-1
+gini.las
+perf.las.1se <- performance(pred.las,"tpr","fpr")
+
+
+# ROC Plot
+plot(perf.las, col="green")
+
+legend(x = "bottomright", legend = paste(c("AUC = "),round(roc.las$auc,3)), col = c("green"), lty = 1, cex = 1.0)
+title(main=paste(" Gini = ", round(gini.las,3)))
+par(pty="s") # to remove both left and right empty data
+
+# Accuracy
+accuracy.las <- sum(diag(table.las))/sum(table.las)
+accuracy.las
+```
+
+We observe that the AUC is 0.007 points higher for the optimal model, however the 1 standard error model is still effective at predicting.
+
+## 5.0 Model Selection
+
+### Model Comparison
+
+```{r model comparison}
+
+plot(benchmark$FPR, benchmark$TPR, xlab = "", ylab = "")
+par(new=T)
+plot(perf.las, col="green")
+par(new=T)
+plot(perf.AIC.log, col="red")
+par(new=T)
+plot(perf.rf.1, col="blue")
+par(new=T)
+plot(perf.u, col="yellow")
+par(new=T)
+plot(perf.d, col="purple")
+
+legend(x = "bottomright", legend =c("stepAIC", "Random Forest", "Lasso", "UpSampling", "DownSampling"), col = c("red", "green", "blue","yellow", "purple"), lty = 1, cex = 1.0)
+title(main=" ROC Plots ")
+
+
+models = c("StepAIC", "Random Forest", "Lasso", "UpSampling", "DownSampling")
+AUCs = c(roc.aic.log$auc,roc.rf$auc,roc.las$auc,roc.u$auc,roc.rf.d$auc)
+Accuracies = c(accuracy.aic.logit, accuracy.rf, accuracy.las, acuuracy.u, accuracy.d)
+
+result <- 
+  data.frame(
+    Model = models,
+    AUC = AUCs,
+    Accuracy = Accuracies
+  )
+
+knitr::kable(result)
+
+
+```
+
+# 6.0 Discussion
+
+
+*What are appropriate approaches to modelling credit risk and what is the current state-of-the-art in this arena?* 
+
+There are a few differnt approaches to modelling credit risk such as model based on the financial statement analysis i.e. using unique scorecards, model measuring default probability and machine learning models which incorporate a lot of scientific reasoning and big data to create a credit risk model. The current state-of-the-art will be the machine learning models for example Random Forest which has been utilized in the project. With the advanced analytical tools such as R and Python, the accuracy of credit risk modelling has greatly improved. 
+
+
+*How does this model perform compared to the one you used previously? How can it be expected to perform on new loans?*
+
+
+The developed model performed far better than the old model. This can be seen on the GINI value for Test sets of `r gini.aic.log`. This GINI value of 0.407 with the corresponding accuracy `r accuracy.aic.logit *100 `% shows that the model is able to accurately predict the future loans. The model has been validated by splitting the data into Test and Train sets. 
+
+
+*What are the important variables in this model and how do they compare to variables the bank has found to be traditionally important in its own modelling?*
+
+12 variables were used in the Final model:
+
+<div class="col2">
+
+* term
+* sub_grade
+* log(annual_inc)
+* purpose
+* inq_last_6mths
+* pub_rec
+* revol_util
+* total_acc
+* emp_length.f
+* credit_length
+
+</div>
+
+
+
+Traditionally, banks employ scorecards when it comes to quantifying the risk of loan default. However these scorecards are unique and private for each bank. The typical scorecard variables are previous enquiry, default or bankruptcy record, client's age, serviceability, loan purpose, loan size, previous account performance or utilisation and if he or she is a first home buyer. 
+
+The proposed credit risk model determined the most important variables were term, subgrade, annual income, number of inquiries in the last 6 months, number of public record, whether the client is employed, loan purpose, revolving utilization rate and the length of the credit. These coincide with the typical variables,  with the number of inquiries in the last 6 months, default or bankruptcy record reflected in public record, and loan purpose. 
+
+The model has also indicates that client who have longer loan terms have a higher risk to defaultas it provides more exposure to risk. Besides, clients who have lower grade tends to have a higher chance to default, as it supports that the clients might be graded according to the pass loaning behaviour or income. 
+Not surprisingly, the result has shown that people who has higher income will have a lower chance to default. At the same time if the client is not employed, he or she will have a higher chance to default. Variables such as revolving utilization and the credit length also helps in indicating clients that have potential to default.
+
+
+*What assurances and justifications can you make about the statistical rigor of your model and modelling methodology?*
+
+
+All the procedures throughout this modelling process have been justified by a range of methods. Variables were considered individually for their effects on the response "Repay Fail". They were then being removed if it is found statistically insignificant in the full model. This is then being further confirmed using the ANOVA. 
+
+After obtaining a sufficient model, further manipulations of variables were considered in an investigatino into further improve the model.  Even after obtaining the final model, variable coefficients were analysed in context of confidence intervals and business knowledge to confirm that their effects were not ambiguous.  Additionally, the final model was verified on the Train set to confirm it was valid, and then used on the Test set to assess its performance on future data.  Overall, the model development process followed common statistical methods, with all conclusions based on a range of evidence.
+
+### Recommendations
+
+If the analysis were to be repeated, a few additional processes could be considered.
+
+* To work more on classifying data with more extensive method
+* Reject Inference method can be incorporated in the modelling process to obtain a better model.
+* Reconsider handlign N/As. In this project, variables with large proportion of NAs have been removed. Better treatment for missing data will help improve the current model but would require assistance from industry experience or more sufficient data. 
+* Recommending bank take further action to make a decision about what threshold is in their best interest from a business perspective. For instance, by having model that predicts non defaulted ensures earning for the bank whereas the model which predicts defaulted helps to avoid loss of money. However, as business risks and factors were not included this was outside of the scope of this project.
+
+### Appendix
+## References
+Akhadov, A., Rogers, D., & Filipenkov, N. (2018). 6 Keys to Credit Risk Modeling for the Digital Age. Retrieved 14 October 2019, from https://www.sas.com/content/dam/SAS/en_us/doc/whitepaper1/credit-risk-modeling-digital-age-109772.pdf
+
+Altman, E., Resti, A., & Sironi, A. (2004). Default Recovery Rates in Credit Risk Modelling: A Review of the Literature and Empirical Evidence. Economic Notes, 33(2), 183-208. doi: 10.1111/j.0391-5026.2004.00129.x
+
+Banasik, J., Crook, J., & Thomas, L. (2003). Sample selection bias in credit scoring models. Journal Of The Operational Research Society, 54(8), 822-832. doi: 10.1057/palgrave.jors.2601578
+
+Ditrich, J. (2015). SELECTION BIAS REDUCTION IN CREDIT SCORING MODELS. In The 9th International Days of Statistics and Economics. Prague, Czech Republic: University of Economics, Prague. Retrieved from https://pdfs.semanticscholar.org/0e5d/1b35645625e166764565ed5018057f73eefb.pdf
+
+Grennepois, N., Alvirescu, A., & Bombail, M. (2018). Point of View: Using Random Forest for credit risk models. Retrieved 14 October 2019, from https://www2.deloitte.com/content/dam/Deloitte/nl/Documents/financial-services/deloitte-nl-fsi-using-random-forest-for-credit-risk-models.pdf
+
+Moradi, S., & Mokhatab Rafiei, F. (2019). A dynamic credit risk assessment model with data mining techniques: evidence from Iranian banks. Financial Innovation, 5(1). doi: 10.1186/s40854-019-0121-9 
+
+Rezac, M., & Rezac, F. (2011). How to Measure the Quality of Credit Scoring Models.
+
+Stelzer, A. (2019) Predicting credit default probabilities using machine learning techniques in the face of unequal class distributions. Retrieved 14 October 2019, from https://arxiv.org/pdf/1907.12996.pdf?fbclid=IwAR0eODjI1uUSS5V37-vsgLBJB15JmDh5MDC5Q5KvNLnm5mkLe_hGZbKL9rY
+
+Yoo, W., Mayberry, R., Bae, S., Singh, K., Peter He, Q., & Lillard, J. W., Jr (2014). A Study of Effects of MultiCollinearity in the Multivariable Analysis. International journal of applied science and technology, 4(5), 9-19.
+
+

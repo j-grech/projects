@@ -1,0 +1,37 @@
+---
+title: "MXB344_NN_version"
+author: "Joe Grech"
+date: "07/08/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import the data
+``` {r import data }
+
+
+
+final <- read.csv("final_data.csv")
+
+
+
+#remove useless variables
+final<-final[-c(1,2,3,4)]
+final$defaulted = is.na(final$mths_since_last_delinq)
+final<-final[complete.cases(final[,c("loan_amnt","funded_amnt","term","int_rate","installment","grade","sub_grade","emp_length","home_ownership","annual_inc","defaulted","verification_status","zip_code","addr_state","dti","delinq_2yrs","earliest_cr_line","inq_last_6mths","open_acc","pub_rec","revol_bal","revol_util","repay_fail")]),]
+
+
+
+##Remove the month since last delinque
+#remove last payment, next payment, last credit pull
+
+
+final<-final[,c("loan_amnt","funded_amnt","term","int_rate","installment","grade","sub_grade","emp_length","home_ownership","annual_inc","defaulted","verification_status","zip_code","addr_state","dti","delinq_2yrs","earliest_cr_line","inq_last_6mths","open_acc","pub_rec","revol_bal","revol_util","repay_fail")]
+colSums(is.na(final))
+
+
+final<-final[ , colSums(is.na(final)) == 0]
+

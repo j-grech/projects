@@ -1,0 +1,1223 @@
+---
+title: "Josh Code"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# 1.0 Introduction - problem and context 
+
+- Rebuilding the credit risk model on the loan default of BoQ using Generalised Linear Models as previous model is too ad-hoc. 
+- Objectives of the project : optimize a loan default credit risk model that provides accurate predictability and decision making for any possible loan default scenario
+
+
+# 2.0 Literature Review
+
+# 3.0 Data Exploration and Cleaning
+
+## 3.1 Understanding the data
+```{r load libary and packages, warning=FALSE, echo=FALSE}
+library(rlang)
+library(tidyverse)
+library(readr)
+library(caret)
+library(readr)
+library(funModeling) #Meta Data
+library(MASS)
+library(reshape2)
+library(corrplot)
+library(ggplot2)
+library(pROC)
+library(plyr)
+library(tidyverse)
+library(car)
+library(Information)
+library(ROCR)
+library(party)
+library(chron)
+library(glmnet)
+library(boot)
+```
+
+```{r load data, echo=FALSE, warning=FALSE, message=FALSE}
+
+final <- read.csv("final_data.csv", header = T)
+
+data <- funModeling::df_status(final, print_results = FALSE)
+knitr::kable(data)
+
+attach(final)
+
+## Note
+
+# -q_zeros: quantity of zeros (p_zeros: in percentage)
+# -q_na: quantity of NA (p_na: in percentage)
+# -type: factor or numeric
+# -unique: quantity of unique values
+
+```
+
+As observed above there is no variable with 100% missing or zero values. There are some variables have a high ratio of NAs such as *mths_since_last_delinq* and *next_pymnt_d*. Again the data will have to be checked if it is useful for model building. 
+
+Besides, the data shows a high absolute number of unique valies which will be helpful for plotting across other variables. 
+
+### Number of unique in percentage % 
+```{r, echo=FALSE}
+data <- 
+  data %>% 
+  mutate(uniq_rat = unique / nrow(final))
+
+data %>% dplyr::select(variable, unique, uniq_rat) %>%
+mutate(unique = unique, uniq_rat = scales::percent(uniq_rat)) %>%
+knitr::kable()
+```
+
+A variable that holds more than 30% unique values is not ideal to be use for modelling as its too variable.
+
+## 3. Variables Selection
+
+
+## 3.1 Data Transformation and restructure
+
+```{r echo=FALSE}
+
+# set repay_fail from int to factor
+final$repay_fail<-factor(final$repay_fail)
+final$issue_d<-as.Date(paste("01-", final$issue_d, sep = ""), format = "%d-%b-%y")
+final$earliest_cr_line<-as.Date(chron(paste("01-", final$earliest_cr_line, sep = ""), format = "day-month-year"))
+
+# From the 1st table above we see that *mths_since_last_deling* holds a large value of NAs. If we dive deep to understand this 2 variables, the NAs could indicate that clients does not have any delinquency record. Hence, it will be set to 0.
+
+#mths_since_last_deling
+final$mths_since_last_delinq<- factor(ifelse(is.na(final$mths_since_last_delinq), 1, 0))
+
+#Set inq last 6 months into binary
+final$inq_last_6mths<- factor(ifelse(final$inq_last_6mths>0, 1, 0))
+
+#convert the variables
+final$revol_util <- as.numeric(sub("%","",final$revol_util))/100 # setting into numeric form
+
+# setting delinq_2yrs into binary
+final$delinq_2yrs<-factor(ifelse(final$delinq_2yrs>0, 1, 0))
+
+# setting pub_rec into binary, if there the client had more than 1 derogatory record will be set into 1 else 0 -- test this
+final$pub_rec<-factor(ifelse(final$pub_rec>0, 1, 0))
+
+## earliest credit line -  change earliest credit line to difference between credit line and issue date
+     final$credit_length <- final$issue_d -final$earliest_cr_line
+     final$credit_length <- as.numeric(final$credit_length, units="days")
+     final<-subset(final,select=-c(issue_d,earliest_cr_line))
+
+# "Employment Length" was converted to a binary variable, where "1" represented that the applicant was unemployed and "0" represented that the applicant was employed.
+
+emp_length_factor = matrix(0, length(final$emp_length), 1)
+for (i in 1:length(emp_length_factor)){
+  if (final$emp_length[i] == "n/a"){
+    emp_length_factor[i] = 1
+  }
+}
+
+####
+final$home_ownership<-as.character(final$home_ownership)
+final$home_ownership[final$home_ownership %in% c("OTHER","NONE")] <- "OTHER"
+final$home_ownership <- as.factor(final$home_ownership)
+
+#Setting repay fail into logic indicator TRUE and FALSE
+
+defaulted <-
+  c("1")
+
+final <- cbind(final, emp_length_factor)
+rm(emp_length_factor)
+final$emp_length_factor<-factor(final$emp_length_factor)
+final<-subset(final, select = -c(emp_length)) # replaced by emp_length_factor , removed emp_length
+attach(final)
+```
+
+## 3.? remove
+
+Some variables could appear similar to other variables or is not benificial to the model due to the incompleteness of the data. Thus, they will be removed and will not be considered in our model.
+
+The variables that we are removing:
+- X.1                 : Not a indicator for modelling, since all values are unique
+- X                   : Not a indicator for modelling, since all values are unique
+- id                  : Not a indicator for modelling, since all values are unique
+- member_id           : Not a indicator for modelling, since all values are unique
+- grade               : sub-grade can be shown to be more effective using random forests
+- next_pymnt_d        : it appears to have high NAs ratio approximately 91.2%, not known before loan
+- addr_state          : Avoid geographical bias 
+- zip_code            : Avoid geographical bias 
+- loan_status         : Not known before loan is accepted/rejected
+- total_pymt          : Not known before loan 
+- total_pymnt_inv     : Not known before loan
+- total_rec_int       : Not known before loan
+- total_rec_prncp     : Not known before loan
+- last_pymnt_d        : Not known before loan
+- last_pymnt_amnt     : Not known before loan
+- recoveries          : Not known before loan
+
+```{r remove variables, echo=FALSE, message=FALSE, warning=FALSE}
+# remove unused variables 
+final<-subset(final, select = -c(X.1,X,id,member_id,grade,next_pymnt_d,loan_status,addr_state,zip_code, total_pymnt, total_pymnt_inv, total_rec_int, total_rec_prncp,last_pymnt_d, last_pymnt_amnt, next_pymnt_d,recoveries, last_credit_pull_d,funded_amnt,funded_amnt_inv))
+```
+
+
+## 3.2 Dealing with missing data
+```{r, echo=FALSE}
+
+#NOT INCLUDE
+
+#Checking for empty column
+colSums(is.na(final))
+
+
+final <- na.omit(final)
+# Checking if NA rows are removed
+colSums(is.na(final))
+
+```
+
+empty columns have been removed 
+- by removing the entire row loan_amnt,funded_amnt, funded_mnt_inv, installment, annual_inc, deling_2yrs, inq_last6mths, open_accm pub_rec,revol_util, total_acc and last_credit_pull_d.
+
+
+
+## Exploratory Data
+```{r importing data}
+# Checking amount of repay fail by the bank
+ppl_default<-table(final$repay_fail)
+default_rate<-ppl_default[[2]][1]/ppl_default[[1]][1]
+default_rate # default rate : 18% 
+```
+
+
+
+### Verification status
+A plot of verification status against repay fail
+```{r, echo=FALSE}
+# Verification status
+
+ggplot(final, aes(x = verification_status, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("verification_status")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail")
+
+```
+Result suggested that sources that are not verified tends to have higher repayment rate. 
+
+### Sub_Grade
+```{r echo=FALSE}
+# It is known that the lower the grade tends to have a higher interest rate, we easily visualize this by plotting them
+ggplot(final , aes(x = sub_grade , y = int_rate , fill = sub_grade)) + 
+        geom_boxplot() + 
+        labs(y = 'Interest Rate' , x = 'Sub_Grade')
+
+# Sub_Grade
+ggplot(final, aes(x = sub_grade, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("Sub_Grade")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail")   ## Find out the rate of deafult on each grade? perhaps
+
+
+```
+
+### Employment period
+```{r, echo = FALSE}
+
+# Employment period
+ggplot(final, aes(x = emp_length_factor, fill = factor(repay_fail)))+
+  geom_bar(width = 0.5)+
+  xlab("Employment Period")+
+  ylab("Total Count")+
+  labs(fill = "repay_fail") # Do it in boxplot
+
+# Porportion table for repay fail rate by employment length 
+q<-colSums(table(repay_fail,emp_length_factor))
+q<-rbind(q,q)
+t(table(repay_fail,emp_length_factor)/q)
+
+# Note emp_length_factor '0' indicate client is employes, else '1' is unemployed.
+
+```
+
+### Loan Amount and Annual Income 
+```{r}
+par(mfrow= c(2,2))
+hist(loan_amnt)
+hist(annual_inc)
+hist(log(loan_amnt))
+hist(log(annual_inc))
+
+```
+As we observed the histogram for loan amount and annual income are right skewed. This can be easily fixed by adding log into the variables.
+
+## Correlation Plot and table accross numerical variable
+```{r message=FALSE, echo=FALSE, warning=FALSE}
+
+#1st and last plot not included in thereport
+
+final$repay_fail<-as.numeric(final$repay_fail)-1
+infoTables <- create_infotables(data = final,
+                               y = "repay_fail")
+
+final$repay_fail<-as.factor(final$repay_fail)
+
+
+
+#  Plot IV
+plotFrame <- infoTables$Summary[order(-infoTables$Summary$IV), ]
+plotFrame$Variable <- factor(plotFrame$Variable,
+
+                            levels = plotFrame$Variable[order(-plotFrame$IV)])
+
+ggplot(plotFrame, aes(x = Variable, y = IV)) +
+geom_bar(width = .35, stat = "identity", color = "darkblue", fill = "white") +
+ggtitle("Information Value") +
+theme_bw() +
+theme(plot.title = element_text(size = 10)) +
+theme(axis.text.x = element_text(angle = 90))
+
+
+num_var <- 
+  final %>% 
+  sapply(is.numeric) %>% 
+  which() %>% 
+  names()
+
+corrplot(cor(final[,num_var]), method = "circle", use="complete.obs", type ="upper")
+
+# It appears loan amnt variable is highly correlated with funded_amnt, funded_amnt_inv, installment, total_payment, total_payment_inv, total_rec_prncp,total_rec_int. Hence, these variables will be removed
+
+# total acc show high correlation with open_acc. Hence, open_acc its removed
+final<-subset(final, select = -c(installment, open_acc))
+```
+
+Based on the correlation plot above it appears some of the numerical variables from the data are highly correlated. Some highly correlated variables would indicate they are similar. Hence, could possibly sharing the same information.
+
+*ADD EXPLANATION ON CORRELATED VARIABLES FROM THE corr plot*
+- LOAN AMNT CORRELATED WITH funded_amnt, funded_amnt_inv and installment.
+
+
+
+## 4.2 Data Splitting
+```{r}
+#split the data into 30% validation and 70% training set
+smp_size <- floor(0.70 * nrow(final))
+set.seed(69)
+train_ind <- sample(seq_len(nrow(final)), size = smp_size)
+
+train <- final[train_ind, ]
+test <- final[-train_ind, ]
+
+train.AIC<-train
+test.AIC <- final[-train_ind, ]
+train.rf<-train
+train.las<-train
+
+```
+
+## 4.3 Fitting individuals variable in GLM
+Checking the significant and insignificant of the variable and the coefficident value given repay fail as our response to see how it affect
+```{r fitting glm model, echo=FALSE}
+
+attach(final)
+
+fit_loan_amnt <- glm(repay_fail ~ log(loan_amnt) , data = train.AIC, family = binomial(link = "logit"),maxit=100) # maxit is added so that the glm model will converge
+
+fit_term<- glm(repay_fail ~ term , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_int_rate<- glm(repay_fail ~ int_rate , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_sub_grade<- glm(repay_fail ~ sub_grade , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_home_ownership<-glm(repay_fail ~ home_ownership , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_annual_inc<-glm(repay_fail ~ log(annual_inc) , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_verification_status<-glm(repay_fail ~ verification_status , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_purpose<-glm(repay_fail ~ purpose , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_dti<-glm(repay_fail ~ dti , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_delinq_2yrs<-glm(repay_fail ~ delinq_2yrs , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_inq_last_6mths<-glm(repay_fail ~ inq_last_6mths , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_mths_since_last_delinq<-glm(repay_fail ~ mths_since_last_delinq , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_pub_rec<- glm(repay_fail ~ pub_rec , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_revol_util<- glm(repay_fail ~ revol_util , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_total_acc<- glm(repay_fail ~ total_acc , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_emp_length_factor<- glm(repay_fail ~ emp_length_factor , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+
+fit_credit_length<- glm(repay_fail ~ credit_length , data = train.AIC, family = binomial(link = "logit"),maxit=100)
+# low coef
+
+
+model.list <- list(
+  "fit_loan_amnt" = fit_loan_amnt,
+  "fit_term" = fit_term,
+  "fit_int_rate" = fit_int_rate,
+  "fit_sub_grade" = fit_sub_grade,
+  "fit_home_ownership" = fit_home_ownership,
+  "fit_annual_inc" = fit_annual_inc,
+  "fit_verification_status" = fit_verification_status,
+  "fit_purpose" = fit_purpose,
+  "fit_dti" = fit_dti,
+  "fit_delinq_2yrs" = fit_delinq_2yrs,
+  "fit_inq_last_6mths" = fit_inq_last_6mths,
+  "fit_mths_since_last_delinq" = fit_mths_since_last_delinq,
+  "fit_pub_rec" = fit_pub_rec,
+  "fit_revol_util" = fit_revol_util,
+  "fit_total_acc" = fit_total_acc,
+  "fit_emp_length_factor" = fit_emp_length_factor
+)
+
+pvalue <- function(fit) {
+  a <- summary(fit)
+  p.value <-a$coefficients[1,4]
+  if (p.value > 0.05) {sig <- "Not Significant"}
+  else if (p.value > 0.01) {sig <- "Significant"}
+  else {sig <- "Highly Significant"}
+  return(sig)
+}
+
+pvalues <- sapply(model.list, FUN = pvalue)
+list.name <- c(names(train.AIC)[1:15], names(train.AIC)[19])
+
+# Remove some fit summary this code not working
+result <- 
+  data.frame(
+    Variable = list.name,
+    Pvalue = pvalues
+  )
+knitr::kable(result,row.names = FALSE,col.names = c("Variables", "P-Value"))
+
+```
+
+Insignificant variables are *earliest credit line* and *total account*. Hence, they will be removed.
+
+The coefficeint generaly indicates the effect of a variable would change on the response. Hence, variables that will be removed are *issue date*, *months since last delinquency* and *last credit pull date* as the the coeficient are near zero.
+
+# 5.0 Results
+
+## 5.1 Model Coefficients
+
+
+
+#Initial full model fit
+
+```{r}
+# - Multicollinearity
+# - StepAIC final model
+# - remove insignificant variables
+
+
+
+set.seed(69)
+Initial_full_AIC_model<-glm(repay_fail ~ log(loan_amnt)+term+sub_grade+int_rate+home_ownership+log(annual_inc)+verification_status+purpose+dti
+                        +delinq_2yrs+inq_last_6mths+mths_since_last_delinq+pub_rec+revol_util+total_acc+emp_length_factor+credit_length
+                          , data = train.AIC, family = binomial(link ="logit"),maxit=100)
+
+
+
+
+# For further checking of the model, we would determine the initial model by using Variance Inflation Factor (vif) to check for multicollinearity
+vif(Initial_full_AIC_model)
+
+# The rule of thumb for vif is that collinearity would cause large variance and covariance and making precise estimation difficult. So, it is necesarry to detect the collinearity as well as to remove them. Generally any values more than 10  is yet to be said that the variables are highly collinear. In this case it appears that int_rate and grade are higlly collinear, since grade have a higher coef than int_rate , int_rate will be remove from the model.
+
+
+# Int_rate is removed from the Initial_full_model
+Initial_full_model<-glm(repay_fail ~ log(loan_amnt)+term+sub_grade+home_ownership+log(annual_inc)+verification_status+purpose+dti
+                        +delinq_2yrs+inq_last_6mths+mths_since_last_delinq+pub_rec+revol_util+total_acc+emp_length_factor+credit_length
+                          , data = train.AIC, family = binomial(link ="logit"),maxit=100)
+
+# Check again
+vif(Initial_full_model)
+
+# All variables are closed to 1 it indicates that the variables are highly correlated with each other.
+
+
+# We wanted to check in general if addr state play significant role in the model as it holds a huge number of factors, this can be done by Calculation Of Variable Importance For Regression And Classification Models (varImp)
+
+summary(Initial_full_model)
+
+#From the summary above it appears *total acc*,*loan_amnt* ,*homeownership*, *mths_since_last_delinq*, *dti*, *verification_status* and *delinquency in 2years* to be insignificant to the data. Hence, it will be removed from the model.
+
+
+#stepAIC
+stepAIC_final_model<-stepAIC(Initial_full_model, direction = "both")
+
+summary(stepAIC_final_model) #dti is insignificant, removed
+stepAIC_final_model<-glm(repay_fail~ term + sub_grade + log(annual_inc) + purpose + 
+    inq_last_6mths + pub_rec + revol_util + total_acc + emp_length_factor + 
+    credit_length,  data = train.AIC, family = binomial(link ="logit"),maxit=100)
+
+anova(Initial_full_AIC_model,stepAIC_final_model) # Compare
+```
+
+From the summary above it appears *homeownership*, *verification status*, and *delinquency in 2years* to be insignificant to the data. Hence, it will be removed from the model.
+
+### Model Validation, Information Value, Cross validation 10 K-fold
+
+```{r}
+# load the library
+library(mlbench)
+library(caret)
+library(doParallel)
+library(gbm)
+set.seed(69)
+
+# Installation of the doSNOW parallel library with all dependencies
+doInstall <- TRUE # Change to FALSE if you don't want packages installed.
+toInstall <- c("doSNOW") 
+if((doInstall) && (!is.element(toInstall, installed.packages()[,1])))
+{
+    cat("Please install required package. Select server:"); chooseCRANmirror();
+    install.packages(toInstall, dependencies = c("Depends", "Imports")) 
+}
+
+# load doSnow and (parallel for CPU info) library
+library(doSNOW)
+library(parallel)
+
+# For doSNOW one can increase up to 128 nodes
+# Each node requires 44 Mbyte RAM under WINDOWS.
+
+# detect cores with parallel() package
+nCores <- detectCores(logical = FALSE)
+cat(nCores, " cores detected.")
+
+# detect threads with parallel()
+nThreads<- detectCores(logical = TRUE)
+cat(nThreads, " threads detected.")
+
+# Create doSNOW compute cluster (try 64)
+# One can increase up to 128 nodes
+# Each node requires 44 Mbyte RAM under WINDOWS.
+cluster = makeCluster(nThreads, type = "SOCK")
+class(cluster);
+
+# register the cluster
+registerDoSNOW(cluster)
+
+#get info
+getDoParWorkers(); getDoParName();
+
+# insert parallel computation here
+        
+# stop cluster and remove clients
+stopCluster(cluster); print("Cluster stopped.")
+
+# insert serial backend, otherwise error in repetetive tasks
+registerDoSEQ()
+
+# clean up a bit.
+invisible(gc); remove(nCores); remove(nThreads); remove(cluster); 
+
+# END
+
+# prepare training scheme, 10 fold-cross validation.
+control <- trainControl(method="cv", number=10 ,classProbs = T,summaryFunction = twoClassSummary)
+
+# fix the parameters of the algorithm
+levels(train.AIC$repay_fail) <- c("notDef", "Def")
+
+model<- train( repay_fail~term + sub_grade + log(annual_inc) + purpose + 
+    inq_last_6mths + pub_rec + revol_util + total_acc + emp_length_factor + 
+    credit_length,data = train.AIC, method="glm",metric="ROC",family= binomial, trControl=control )
+
+print(model)
+
+# estimate variable importance
+importance <- varImp(model, scale=FALSE)
+# summarize importance
+print(importance)
+# plot importance
+plot(importance, main=" Information Value")
+
+
+library(cvTools)
+calc_auc<- function(pred, act){
+  u<-prediction(pred,act)
+  return(performance(u, "auc")@y.values[[1]])
+}
+cvFit(stepAIC_final_model, data= train.AIC, y=train.AIC$repay_fail, cost = calc_auc, predictArgs = "response", K = 10)
+
+u<-prediction(stepAIC_final_model,train.AIC)
+
+# cross-validation
+cv.glm(test.AIC, stepAIC_final_model, K =10)
+```
+
+### Find the optimum cut off of the data
+```{r}
+library(InformationValue)
+
+predicted.data <- data.frame(
+probability.of.default=stepAIC_final_model$fitted.values,
+deafult=train.AIC$repay_fail)
+
+predicted.data$actuals <-factor(predicted.data$deafult, labels =c(0,1))
+
+optCutOff.AIC <- optimalCutoff(predicted.data$actuals, predicted.data$probability.of.default)
+optCutOff.AIC
+```
+
+
+### Confusion Matrix
+```{r, echo=FALSE}
+# # Prediction on the training set
+p <- predict(stepAIC_final_model,test.AIC, type = "response")
+
+# Confusion Matrix
+preds.for.50 = factor(ifelse(p>optCutOff.AIC,1,0))
+table_mat_aic<- table(Predicted = preds.for.50, Actual= test.AIC$repay_fail)
+table_mat_aic
+
+```
+
+### Accuracy Test of our model
+```{r, echo=FALSE}
+accuracy_test_aic<- sum(diag(table_mat_aic))/sum(table_mat_aic)
+
+```
+
+### ROC and AUC curve
+```{r}
+# Prediction on the testing set
+# Step Initial Model
+p_AIC <- predict(stepAIC_final_model,test.AIC, type = "response")
+
+roc_final_glm <- pROC::roc(response = test.AIC$repay_fail, predictor = p_AIC)
+
+
+pROC::plot.roc(x = roc_final_glm, legacy.axes = FALSE, xlim = c(1, 0), asp = NA,
+               col = "green", print.auc = FALSE, print.auc.y = .4)
+
+legend(x = "bottomright", legend=c("roc_final_glm = 0.6997"), 
+       col = c("green"), lty = 1, cex = 1.0)
+title(main=" Gini = 0.3994749")
+par(pty="s") # to remove both left and right empty data
+
+Gini_value<- 2*roc_final_glm$auc-1
+
+
+```
+
+# Accuracy, sensitivity and specificity plot
+```{r}
+# check specificity
+
+k = 0
+accuracy = c()
+sensitivity = c()
+specificity = c()
+for(i in seq(from = 0.01 , to = optCutOff.AIC , by = 0.01)){
+        k = k + 1
+        preds.nb = factor(ifelse(p>i,1,0))
+        confmat = table(test.AIC$repay_fail , preds.nb)
+        accuracy[k] = sum(diag(confmat)) / sum(confmat)
+        sensitivity[k] = confmat[1 , 1] / sum(confmat[ , 1])
+        specificity[k] = confmat[2 , 2] / sum(confmat[ , 2])
+}
+
+threshold = seq(from = 0.01 , to = optCutOff.AIC , by = 0.01)
+
+data = data.frame(threshold , accuracy , sensitivity , specificity)
+
+# Gather accuracy , sensitivity and specificity in one column
+ggplot(gather(data , key = 'Metric' , value = 'Value' , 2:4) , 
+       aes(x = threshold , y = Value , color = Metric)) + 
+        geom_line(size = 1.5)
+```
+
+
+
+Random Forest Variable Selection
+
+```{r rf}
+set.seed(420)
+fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf)
+imp.rf<-varimp(fit_rf)
+imp.rf<-imp.rf[order(imp.rf, decreasing = TRUE)]
+sum(imp.rf)*0.95
+i<-0
+j<-1
+while(i<sum(imp.rf)*0.95){
+  i = i+imp.rf[j]
+  print(imp.rf[j])
+  j = j+1
+}
+## remove grade as subgrade is more important
+
+train.rf<-subset(train.rf,select=-c(grade))
+
+
+```
+
+
+
+```{r rfvariable selection}
+set.seed(420)
+
+
+col_idx <- grep("repay_fail", names(train.rf))
+train.rf <- train.rf[, c((1:ncol(train.rf))[-col_idx],col_idx)]
+
+
+
+set.seed(420)
+k<-5
+folds<- createFolds(train.rf$repay_fail, k = k)
+
+fold_auc.cl = list()
+fold_auc.lg = list()
+fold_auc.pr = list()
+
+selected = list()
+for (i in seq_along(folds)) {
+
+  # split for fold i  
+  trn_fold = train.rf[-folds[[i]], ]
+  val_fold = train.rf[folds[[i]], ]
+
+  # screening for fold i  
+  fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=trn_fold)
+  imp.rf<-varimp(fit_rf)
+  selected[[i]] = order(imp.rf, decreasing = TRUE)
+  
+  var_auc.cl = rep(0, length(selected[[i]]))
+  var_auc.lg = rep(0, length(selected[[i]]))
+  var_auc.pr = rep(0, length(selected[[i]]))
+  for(j in 1:length(selected[[i]])){
+      trn_fold_screen = trn_fold[ , c(19, selected[[i]][1:j])]
+      val_fold_screen = val_fold[ , c(19, selected[[i]][1:j])]
+    
+      # auc for fold i  
+      add_log_mod.cl = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=cloglog))
+      add_log_prob.cl = predict(add_log_mod.cl, newdata = val_fold_screen, type = "response")
+      add_log_pred.cl = ifelse(add_log_prob.cl > 0.5, yes = 1, no = 0)
+      var_auc.cl[j] =   roc(val_fold_screen$repay_fail, add_log_prob.cl)$auc
+      
+      add_log_mod.lg = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=logit))
+      add_log_prob.lg = predict(add_log_mod.lg, newdata = val_fold_screen, type = "response")
+      add_log_pred.lg = ifelse(add_log_prob.lg > 0.5, yes = 1, no = 0)
+      var_auc.lg[j] =   roc(val_fold_screen$repay_fail, add_log_prob.lg)$auc
+      
+      add_log_mod.pr = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=probit))
+      add_log_prob.pr = predict(add_log_mod.pr, newdata = val_fold_screen, type = "response")
+      add_log_pred.pr = ifelse(add_log_prob.pr > 0.5, yes = 1, no = 0)
+      var_auc.pr[j] =   roc(val_fold_screen$repay_fail, add_log_prob.pr)$auc
+      
+  }
+  fold_auc.cl[[i]] = var_auc.cl 
+  fold_auc.lg[[i]] = var_auc.lg 
+  fold_auc.pr[[i]] = var_auc.pr 
+}
+
+# report all 10 validation fold errors
+x<-1:length(selected[[1]])
+
+# plot(x,fold_auc[[1]])
+# for(i in 1:5){
+#   lines(x,fold_auc[[i]])
+# }
+
+rf.fold_auc.cl.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.cl[[j]][i]
+  }
+  rf.fold_auc.cl.mean[i]<-a/k
+}
+rf.fold_auc.cl.mean
+
+rf.fold_auc.lg.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.lg[[j]][i]
+  }
+  rf.fold_auc.lg.mean[i]<-a/k
+}
+rf.fold_auc.lg.mean
+
+rf.fold_auc.pr.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.pr[[j]][i]
+  }
+  rf.fold_auc.pr.mean[i]<-a/k
+}
+rf.fold_auc.pr.mean
+
+plot(x, rf.fold_auc.cl.mean, type = "l", lty = 1,col = "red")
+lines(x,rf.fold_auc.lg.mean, type = "l",col = "blue")
+lines(x,rf.fold_auc.pr.mean, type = "l",col = "green")
+
+
+```
+
+```{r rfmodel}
+set.seed(420)
+
+
+fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf)
+imp.rf<-varimp(fit_rf)
+imp.rf<-imp.rf[order(imp.rf, decreasing = TRUE)]
+sum(imp.rf)*0.95
+i<-0
+j<-1
+while(i<sum(imp.rf)*0.95){
+  i = i+imp.rf[j]
+  print(imp.rf[j])
+  j = j+1
+}
+
+fit.rf.logit<- glm(data = train.rf, repay_fail~log(annual_inc)+term+sub_grade+int_rate+credit_length+purpose+revol_util+log(loan_amnt), family = binomial(link=logit))
+fit.rf.cloglog<- glm(data = train.rf, repay_fail~log(annual_inc)+term+sub_grade+int_rate+credit_length+purpose+revol_util+log(loan_amnt), family = binomial(link=cloglog))
+fit.rf.probit<- glm(data = train.rf, repay_fail~log(annual_inc)+term+sub_grade+int_rate+credit_length+purpose+revol_util+log(loan_amnt), family = binomial(link=probit))
+
+
+fit.rf.logit.p<-predict(fit.rf.logit,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.logit.p)$auc
+
+fit.rf.cloglog.p<-predict(fit.rf.cloglog,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.cloglog.p)$auc
+
+fit.rf.probit.p<-predict(fit.rf.probit,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.probit.p)$auc
+
+###
+# AUC | Type
+# 0.6964 | logit
+# 0.696 | cloglog
+# 0.6967 | probit
+
+fit.rf<-fit.rf.probit
+
+
+rf.glm.p<-predict(fit.rf,test, type = "response")
+preds.for.50 = factor(ifelse(rf.glm.p>0.5,1,0))
+rf.table<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+rf.table
+
+rf.glm.pred<-prediction(rf.glm.p,test$repay_fail)
+roc.rf.glm.pred <- roc(test$repay_fail, rf.glm.p)
+roc.rf.glm.pred
+gini.rf.glm.pred<- 2*roc.rf.glm.pred$auc-1
+gini.rf.glm.pred
+perf.rf.1 <- performance(rf.glm.pred,"tpr","fpr")
+
+plot(perf.rf.1)
+
+
+```
+
+
+
+```{r second order terms}
+fit.rf.2<- glm(data = train.rf, repay_fail~log(annual_inc)+term+sub_grade+int_rate+credit_length+purpose+revol_util+log(loan_amnt) +
+                 log(annual_inc):log(loan_amnt)+int_rate:log(annual_inc)+int_rate:log(loan_amnt)+credit_length:log(annual_inc), family = binomial())
+summary(fit.rf.2)
+
+rf.glm.p.2<-predict(fit.rf.2,test, type = "response")
+preds.for.50.2 = factor(ifelse(rf.glm.p.2>0.5,1,0))
+rf.table.2<- table(Predicted = preds.for.50.2, Actual= test$repay_fail)
+rf.table.2
+
+rf.glm.pred.2<-prediction(rf.glm.p.2,test$repay_fail)
+roc.rf.glm.pred.2 <- roc(test$repay_fail, rf.glm.p.2)
+roc.rf.glm.pred.2
+gini.rf.glm.pred.2<- 2*roc.rf.glm.pred.2$auc-1
+gini.rf.glm.pred.2
+perf.rf.2 <- performance(rf.glm.pred.2,"tpr","fpr")
+plot(perf.rf.2)
+```
+
+ 
+```{r rfdown}
+##down sampling
+set.seed(420)
+col_idx <- grep("repay_fail", names(train.rf))
+train.rf <- train.rf[, c((1:ncol(train.rf))[-col_idx],col_idx)]
+
+
+
+k<-5
+folds<- createFolds(train.rf$repay_fail, k = k)
+
+fold_auc.cl = list()
+fold_auc.lg = list()
+fold_auc.pr = list()
+
+selected = list()
+for (i in seq_along(folds)) {
+
+  # split for fold i  
+  trn_fold = train.rf[-folds[[i]], ]
+  trn_fold<-downSample(trn_fold,trn_fold$repay_fail)
+  trn_fold<-trn_fold[,-ncol(trn_fold)]
+
+  val_fold = train.rf[folds[[i]], ]
+
+  # screening for fold i  
+  fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=trn_fold)
+  imp.rf<-varimp(fit_rf)
+  selected[[i]] = order(imp.rf, decreasing = TRUE)
+  
+  var_auc.cl = rep(0, length(selected[[i]]))
+  var_auc.lg = rep(0, length(selected[[i]]))
+  var_auc.pr = rep(0, length(selected[[i]]))
+  for(j in 1:length(selected[[i]])){
+      trn_fold_screen = trn_fold[ , c(19, selected[[i]][1:j])]
+      val_fold_screen = val_fold[ , c(19, selected[[i]][1:j])]
+    
+      # auc for fold i  
+      add_log_mod.cl = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=cloglog))
+      add_log_prob.cl = predict(add_log_mod.cl, newdata = val_fold_screen, type = "response")
+      add_log_pred.cl = ifelse(add_log_prob.cl > 0.5, yes = 1, no = 0)
+      var_auc.cl[j] =   roc(val_fold_screen$repay_fail, add_log_prob.cl)$auc
+      
+      add_log_mod.lg = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=logit))
+      add_log_prob.lg = predict(add_log_mod.lg, newdata = val_fold_screen, type = "response")
+      add_log_pred.lg = ifelse(add_log_prob.lg > 0.5, yes = 1, no = 0)
+      var_auc.lg[j] =   roc(val_fold_screen$repay_fail, add_log_prob.lg)$auc
+      
+      add_log_mod.pr = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=probit))
+      add_log_prob.pr = predict(add_log_mod.pr, newdata = val_fold_screen, type = "response")
+      add_log_pred.pr = ifelse(add_log_prob.pr > 0.5, yes = 1, no = 0)
+      var_auc.pr[j] =   roc(val_fold_screen$repay_fail, add_log_prob.pr)$auc
+      
+  }
+  fold_auc.cl[[i]] = var_auc.cl 
+  fold_auc.lg[[i]] = var_auc.lg 
+  fold_auc.pr[[i]] = var_auc.pr 
+}
+
+# report all 10 validation fold errors
+x<-1:length(selected[[1]])
+
+# plot(x,fold_auc[[1]])
+# for(i in 1:5){
+#   lines(x,fold_auc[[i]])
+# }
+
+d.fold_auc.cl.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.cl[[j]][i]
+  }
+ d.fold_auc.cl.mean[i]<-a/k
+}
+d.fold_auc.cl.mean
+
+d.fold_auc.lg.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.lg[[j]][i]
+  }
+  d.fold_auc.lg.mean[i]<-a/k
+}
+d.fold_auc.lg.mean
+
+d.fold_auc.pr.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.pr[[j]][i]
+  }
+  d.fold_auc.pr.mean[i]<-a/k
+}
+d.fold_auc.pr.mean
+
+plot(x, d.fold_auc.cl.mean, type = "l", lty = 1,col = "red")
+lines(x,d.fold_auc.lg.mean, type = "l",col = "blue")
+lines(x,d.fold_auc.pr.mean, type = "l",col = "green")
+
+```
+
+```{r rf downsample}
+# 
+set.seed(420)
+train.rf.d<-downSample(train.rf,train.rf$repay_fail)
+train.rf.d<-train.rf.d[,-ncol(train.rf.d)]
+
+
+fit_rf.d<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf.d)
+imp.d<-varimp(fit_rf.d)
+imp.d<-imp.d[order(imp.d, decreasing = TRUE)]
+sum(imp.d)*0.95
+i<-0
+j<-1
+while(i<sum(imp.d)*0.95){
+  i = i+imp.d[j]
+  print(imp.d[j])
+  j = j+1
+}
+
+fit.rf.logit.d<- glm(data = train.rf.d, repay_fail~int_rate+sub_grade+term+revol_util+purpose+log(annual_inc)+inq_last_6mths, family = binomial(link=logit))
+fit.rf.cloglog.d<- glm(data = train.rf.d, repay_fail~int_rate+sub_grade+term+revol_util+purpose+log(annual_inc)+inq_last_6mths, family = binomial(link=cloglog))
+fit.rf.probit.d<- glm(data = train.rf.d, repay_fail~int_rate+sub_grade+term+revol_util+purpose+log(annual_inc)+inq_last_6mths, family = binomial(link=probit))
+
+fit.rf.logit.d.p<-predict(fit.rf.logit.d,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.logit.d.p)$auc
+
+fit.rf.cloglog.d.p<-predict(fit.rf.cloglog.d,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.cloglog.d.p)$auc
+
+fit.rf.probit.d.p<-predict(fit.rf.probit.d,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.probit.d.p)$auc
+
+
+
+fit.rf.glm.d<-fit.rf.logit.d
+
+p.d<-predict(fit.rf.glm.d,test, type = "response")
+preds.for.50 = factor(ifelse(p.d>0.5,1,0))
+table.d<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.d
+
+pred.d<-prediction(p.d,test$repay_fail)
+roc.pred.d <- roc(test$repay_fail, p.d)
+roc.pred.d
+gini.pred.d<- 2*roc.pred.d$auc-1
+gini.pred.d
+perf.d <- performance(pred.d,"tpr","fpr")
+plot(perf.d)
+
+# 
+```
+
+```{r upCrossValidation}
+##up sampling
+set.seed(420)
+col_idx <- grep("repay_fail", names(train.rf))
+train.rf <- train.rf[, c((1:ncol(train.rf))[-col_idx],col_idx)]
+
+k<-5
+folds<- createFolds(train.rf$repay_fail, k = k)
+
+fold_auc.cl = list()
+fold_auc.lg = list()
+fold_auc.pr = list()
+
+selected = list()
+for (i in seq_along(folds)) {
+
+  # split for fold i  
+  trn_fold = train.rf[-folds[[i]], ]
+  trn_fold<-upSample(trn_fold,trn_fold$repay_fail)
+  trn_fold<-trn_fold[,-ncol(trn_fold)]
+
+  val_fold = train.rf[folds[[i]], ]
+
+  # screening for fold i  
+  fit_rf<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=trn_fold)
+  imp.rf<-varimp(fit_rf)
+  selected[[i]] = order(imp.rf, decreasing = TRUE)
+  
+  var_auc.cl = rep(0, length(selected[[i]]))
+  var_auc.lg = rep(0, length(selected[[i]]))
+  var_auc.pr = rep(0, length(selected[[i]]))
+  for(j in 1:length(selected[[i]])){
+      trn_fold_screen = trn_fold[ , c(19, selected[[i]][1:j])]
+      val_fold_screen = val_fold[ , c(19, selected[[i]][1:j])]
+    
+      # auc for fold i  
+      add_log_mod.cl = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=cloglog))
+      add_log_prob.cl = predict(add_log_mod.cl, newdata = val_fold_screen, type = "response")
+      add_log_pred.cl = ifelse(add_log_prob.cl > 0.5, yes = 1, no = 0)
+      var_auc.cl[j] =   roc(val_fold_screen$repay_fail, add_log_prob.cl)$auc
+      
+      add_log_mod.lg = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=logit))
+      add_log_prob.lg = predict(add_log_mod.lg, newdata = val_fold_screen, type = "response")
+      add_log_pred.lg = ifelse(add_log_prob.lg > 0.5, yes = 1, no = 0)
+      var_auc.lg[j] =   roc(val_fold_screen$repay_fail, add_log_prob.lg)$auc
+      
+      add_log_mod.pr = glm(repay_fail ~ ., data = trn_fold_screen, family = binomial(link=probit))
+      add_log_prob.pr = predict(add_log_mod.pr, newdata = val_fold_screen, type = "response")
+      add_log_pred.pr = ifelse(add_log_prob.pr > 0.5, yes = 1, no = 0)
+      var_auc.pr[j] =   roc(val_fold_screen$repay_fail, add_log_prob.pr)$auc
+      
+  }
+  fold_auc.cl[[i]] = var_auc.cl 
+  fold_auc.lg[[i]] = var_auc.lg 
+  fold_auc.pr[[i]] = var_auc.pr 
+}
+
+# report all 10 validation fold errors
+x<-1:length(selected[[1]])
+
+# plot(x,fold_auc[[1]])
+# for(i in 1:5){
+#   lines(x,fold_auc[[i]])
+# }
+
+u.fold_auc.cl.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.cl[[j]][i]
+  }
+  u.fold_auc.cl.mean[i]<-a/k
+}
+u.fold_auc.cl.mean
+
+u.fold_auc.lg.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.lg[[j]][i]
+  }
+  u.fold_auc.lg.mean[i]<-a/k
+}
+u.fold_auc.lg.mean
+
+u.fold_auc.pr.mean<- rep(0, length(selected[[1]]))
+for(i in 1:length(selected[[1]])){
+  a<-0
+  for(j in 1:k){
+    a<-a+fold_auc.pr[[j]][i]
+  }
+  u.fold_auc.pr.mean[i]<-a/k
+}
+u.fold_auc.pr.mean
+
+plot(x, u.fold_auc.cl.mean, type = "l", lty = 1,col = "red")
+lines(x,u.fold_auc.lg.mean, type = "l",col = "blue")
+lines(x,u.fold_auc.pr.mean, type = "l",col = "green")
+
+```
+
+
+
+```{r rfup}
+##up sampling
+set.seed(420)
+train.rf.u<-upSample(train.rf,train.rf$repay_fail)
+train.rf.u<-train.rf.u[,-ncol(train.rf.u)]
+
+
+fit_rf.u<-cforest(repay_fail~.,control = cforest_unbiased(mtry = 2, ntree = 50), data=train.rf.u)
+imp<-varimp(fit_rf.u)
+imp<-imp[order(imp, decreasing = TRUE)]
+sum(imp)*0.95
+i<-0
+j<-1
+while(i<sum(imp)*0.95){
+  i = i+imp[j]
+  print(imp[j])
+  j = j+1
+}
+# 
+
+
+fit.rf.logit.u<- glm(data = train.rf.u, repay_fail~sub_grade+int_rate+revol_util+purpose+log(annual_inc)+term+inq_last_6mths+dti+home_ownership+log(loan_amnt)+mths_since_last_delinq+verification_status+total_acc+credit_length+revol_bal+pub_rec+delinq_2yrs+emp_length_factor, family = binomial(link=logit))
+fit.rf.cloglog.u<- glm(data = train.rf.u, repay_fail~sub_grade+int_rate+revol_util+purpose+log(annual_inc)+term+inq_last_6mths+dti+home_ownership+log(loan_amnt)+mths_since_last_delinq+verification_status+total_acc+credit_length+revol_bal+pub_rec+delinq_2yrs+emp_length_factor, family = binomial(link=cloglog))
+fit.rf.probit.u<- glm(data = train.rf.u, repay_fail~sub_grade+int_rate+revol_util+purpose+log(annual_inc)+term+inq_last_6mths+dti+home_ownership+log(loan_amnt)+mths_since_last_delinq+verification_status+total_acc+credit_length+revol_bal+pub_rec+delinq_2yrs+emp_length_factor,family = binomial(link=probit))
+
+fit.rf.logit.u.p<-predict(fit.rf.logit.u,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.logit.u.p)$auc
+
+fit.rf.cloglog.u.p<-predict(fit.rf.cloglog.u,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.cloglog.u.p)$auc
+
+fit.rf.probit.u.p<-predict(fit.rf.probit.u,train.rf, type = "response")
+roc(train.rf$repay_fail, fit.rf.probit.u.p)$auc
+
+fit.u<-fit.rf.logit.u
+
+p.u<-predict(fit.u,test, type = "response")
+preds.for.50 = factor(ifelse(p.u>0.5,1,0))
+table.u<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.u
+
+pred.u<-prediction(p.u,test$repay_fail)
+roc.pred.u <- roc(test$repay_fail, p.u)
+roc.pred.u
+gini.pred.u<- 2*roc.pred.u$auc-1
+gini.pred.u
+perf.u <- performance(pred.u,"tpr","fpr")
+plot(perf.u)
+
+```
+
+
+
+```{r lasso}
+x <- model.matrix(repay_fail~.,train.las)[,-1]
+#convert class to numerical variable
+y <- train.las$repay_fail
+
+#perform grid search to find optimal value of lambda
+#family= binomial => logistic regression, alpha=1 => lasso
+# check docs to explore other type.measure options
+cv.out <- cv.glmnet(x,y,alpha=1,family='binomial',type.measure = 'auc',nfolds=10)
+#plot result
+plot(cv.out)
+
+
+#min value of lambda
+lambda_min <- cv.out$lambda.min
+#best value of lambda
+lambda_1se <- cv.out$lambda.1se
+#regression coefficients
+coef(cv.out,s=lambda_1se)
+
+
+
+
+#get test data
+x_test <- model.matrix(repay_fail~.,test)[,-1]
+y_test <- test$repay_fail
+#predict class, type="class"
+lasso_prob <- predict(cv.out,newx = x_test,s='lambda.1se',type='response')
+#translate probabilities to predictions
+lasso_predict <- rep(0,nrow(x_test))
+lasso_predict[lasso_prob>.5] <- 1
+#confusion matrix
+table(pred=lasso_predict,true=y_test)
+#accuracy
+mean(lasso_predict==y_test)
+
+
+
+p.las<-predict(cv.out,newx = x_test,s='lambda.min',type='response')
+preds.for.50 = factor(ifelse(p.las>0.5,1,0))
+table.las<- table(Predicted = preds.for.50, Actual= test$repay_fail)
+table.las
+
+ pred.las<-prediction(p.las,test$repay_fail)
+roc.pred.las <- roc(test$repay_fail, p.las)
+roc.pred.las
+gini.pred.las<- 2*roc.pred.las$auc-1
+gini.pred.las
+perf.las <- performance(pred.las,"tpr","fpr")
+
+
+```
+
+
+# 6.0 Discussion
+
+1. What are appropriate approaches to modelling credit risk and what is the current state-of-the-art in this arena? 
+2. How does this new model perform compared to the one you used previously? How can it be expected to perform on new loans? There are some performance benchmarks available in the project folder on Blackboard.
+3. What are the important variables in this model and how do they compare to variables the bank has found to be traditionally important in its own modelling?
+4. What assurances and justifications can you make about the statistical rigor of your model and modelling methodology?
+
+
+# 7.0 References

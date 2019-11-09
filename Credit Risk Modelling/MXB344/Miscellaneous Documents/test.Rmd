@@ -1,0 +1,109 @@
+---
+title: "MXB344_NN_version"
+author: "Joe Grech"
+date: "07/08/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import the data
+``` {r import data }
+final <- read.csv("final_data.csv")
+#remove useless variables
+final<-final[-c(1,2,3,4)]
+final$defaulted = is.na(final$mths_since_last_delinq)
+final<-final[complete.cases(final[,c("loan_amnt","funded_amnt","term","int_rate","installment","grade","sub_grade","emp_length","home_ownership","annual_inc","defaulted","verification_status","zip_code","addr_state","dti","delinq_2yrs","earliest_cr_line","inq_last_6mths","open_acc","pub_rec","revol_bal","revol_util","repay_fail")]),]
+
+final<-final[,c("loan_amnt","funded_amnt","term","int_rate","installment","grade","sub_grade","emp_length","home_ownership","annual_inc","defaulted","verification_status","zip_code","addr_state","dti","delinq_2yrs","earliest_cr_line","inq_last_6mths","open_acc","pub_rec","revol_bal","revol_util","repay_fail")]
+colSums(is.na(final))
+
+
+final<-final[ , colSums(is.na(final)) == 0]
+
+smp_size <- floor(0.75 * nrow(final))
+set.seed(123)
+train_ind <- sample(seq_len(nrow(final)), size = smp_size)
+
+train <- final[train_ind, ]
+test <- final[-train_ind, ]
+
+
+y_train<- train[,ncol(train)]
+y_train<-as.factor(y_train)
+x_train<- train[,-ncol(train)]
+sum(is.na(y_train))
+sum(is.na(x_train))
+
+
+y_test<- test[,ncol(train)]
+x_test<- test[,-ncol(train)]
+
+```
+
+## Neural Network Building for Credit Models
+
+Using the provided data, build a neural network using the neuralnet package
+
+```{r rnn}
+require(keras)
+require(abind)
+require(raster)
+require(ineq)
+
+model<-keras_model_sequential()
+# Add first layer
+model %>%
+  layer_dense(units = 30, kernel_initializer = "uniform", activation = "relu",
+              input_shape = ncol(x_train)) %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 30, kernel_initializer = "uniform", activation = "relu") %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 1, kernel_initializer = "uniform", activation = "sigmoid")
+
+model %>% compile(loss = 'binary_crossentropy', optimizer = "adam",metrics = 'accuracy')
+model
+# Training ----------------------------------
+model %>% fit(
+  data.matrix(x_train),data.matrix(y_train),epochs = 30, batch_size=30
+)
+score <- model %>% evaluate(data.matrix(x_test), data.matrix(y_test), batch_size = 128)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r results}
+require(tibble)
+require(tidyverse)
+require(caret)
+require(e1071)
+# <- #fit(object = model,
+              #       x = (data.matrix(x_train)),
+               #      y = data.matrix(y_train),
+                #     batch_size = 100,
+                 #    epochs = 30,
+                  #   validation_split = 0.30)
+#kemodel
+
+
+pred_class <- predict_classes(object = model,
+                                    x = data.matrix(x_test)) %>%
+  as.vector()
+
+pred_prob <- predict_proba(object = model, x = data.matrix(x_test)) %>%
+  as.vector()
+
+predict_value <- tibble(
+  truth = as.factor(y_test) %>% fct_recode(Yes = "1", No = "0"),
+  estimate = as.factor(pred_class) %>% fct_recode(Yes = "1", No = "0"),
+  pred_prob = pred_prob
+)
+
+print(predict_value)
+with(predict_value,confusionMatrix(estimate, truth))
+model %>% save_model_weights_hdf5('my_model.h5')
+```
